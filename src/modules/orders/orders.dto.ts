@@ -42,6 +42,9 @@ export const updateOrderSchema = z.object({
   customerPhone: z.string().min(6).max(30).optional(),
   deliveryFee: z.coerce.number().min(0).optional(),
   platformFeeOverride: z.coerce.number().min(0).optional(),
+  // Reemplaza por completo los negocios/productos del pedido (agregar, quitar, cambiar
+  // cantidad/precio/negocio). Si se omite, los productos existentes no se tocan.
+  businesses: z.array(orderBusinessInputSchema).min(1).optional(),
 });
 
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;

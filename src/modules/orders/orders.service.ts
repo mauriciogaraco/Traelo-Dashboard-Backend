@@ -126,28 +126,27 @@ async function resolveEffectivePercentage(deliverer: {
   return config.defaultDelivererCommissionPercentage;
 }
 
-export async function createOrder(
-  input: CreateOrderInput,
-  registeredByUserId: string,
-): Promise<OrderDTO> {
-  const businessIds = input.businesses.map((group) => group.businessId);
-  if (new Set(businessIds).size !== businessIds.length) {
-    throw new BadRequestError('No se puede repetir el mismo negocio en un pedido');
-  }
+interface PreparedGroup {
+  businessId: string;
+  businessNameSnapshot: string;
+  subtotal: Prisma.Decimal;
+  commissionEarned: Prisma.Decimal;
+  commissionTypeSnapshot: CommissionType;
+  commissionRateSnapshot: Prisma.Decimal | null;
+  items: (calc.ComputedItemPrice & { commissionAmount: Prisma.Decimal })[];
+}
 
-  interface PreparedGroup {
-    businessId: string;
-    businessNameSnapshot: string;
-    subtotal: Prisma.Decimal;
-    commissionEarned: Prisma.Decimal;
-    commissionTypeSnapshot: CommissionType;
-    commissionRateSnapshot: Prisma.Decimal | null;
-    items: (calc.ComputedItemPrice & { commissionAmount: Prisma.Decimal })[];
-  }
-
+/**
+ * Resuelve precios/comisiones para cada negocio+línea de un pedido. Usado tanto al crear
+ * como al reemplazar los productos de un pedido existente — el único lugar que sabe hacer
+ * esto, para que ambos flujos calculen exactamente igual.
+ */
+async function prepareBusinessGroups(
+  businessGroups: CreateOrderInput['businesses'],
+): Promise<PreparedGroup[]> {
   const preparedGroups: PreparedGroup[] = [];
 
-  for (const group of input.businesses) {
+  for (const group of businessGroups) {
     const business = await businessesRepository.findById(group.businessId);
     if (!business || !business.active) {
       throw new NotFoundError(`Negocio ${group.businessId} no encontrado o inactivo`);
@@ -194,6 +193,41 @@ export async function createOrder(
     });
   }
 
+  return preparedGroups;
+}
+
+function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
+  return preparedGroups.map((group) => ({
+    business: { connect: { id: group.businessId } },
+    subtotal: group.subtotal,
+    commissionEarned: group.commissionEarned,
+    businessNameSnapshot: group.businessNameSnapshot,
+    commissionTypeSnapshot: group.commissionTypeSnapshot,
+    commissionRateSnapshot: group.commissionRateSnapshot,
+    items: {
+      create: group.items.map((item) => ({
+        ...(item.productId ? { product: { connect: { id: item.productId } } } : {}),
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        subtotal: item.subtotal,
+        commissionAmount: item.commissionAmount,
+      })),
+    },
+  }));
+}
+
+export async function createOrder(
+  input: CreateOrderInput,
+  registeredByUserId: string,
+): Promise<OrderDTO> {
+  const businessIds = input.businesses.map((group) => group.businessId);
+  if (new Set(businessIds).size !== businessIds.length) {
+    throw new BadRequestError('No se puede repetir el mismo negocio en un pedido');
+  }
+
+  const preparedGroups = await prepareBusinessGroups(input.businesses);
+
   const deliveryFee = new Prisma.Decimal(input.deliveryFee);
   const subtotal = preparedGroups.reduce(
     (acc, group) => acc.plus(group.subtotal),
@@ -233,24 +267,7 @@ export async function createOrder(
     delivererEarning: new Prisma.Decimal(0),
     registeredBy: { connect: { id: registeredByUserId } },
     businesses: {
-      create: preparedGroups.map((group) => ({
-        business: { connect: { id: group.businessId } },
-        subtotal: group.subtotal,
-        commissionEarned: group.commissionEarned,
-        businessNameSnapshot: group.businessNameSnapshot,
-        commissionTypeSnapshot: group.commissionTypeSnapshot,
-        commissionRateSnapshot: group.commissionRateSnapshot,
-        items: {
-          create: group.items.map((item) => ({
-            ...(item.productId ? { product: { connect: { id: item.productId } } } : {}),
-            productName: item.productName,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            subtotal: item.subtotal,
-            commissionAmount: item.commissionAmount,
-          })),
-        },
-      })),
+      create: toBusinessesCreateInput(preparedGroups),
     },
   });
 
@@ -312,22 +329,58 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
     customerPhone: input.customerPhone,
   };
 
-  const deliveryFeeChanged = input.deliveryFee !== undefined;
-  const platformFeeChanged = input.platformFeeOverride !== undefined;
+  const itemsChanged = input.businesses !== undefined;
+  let productsTotal = new Prisma.Decimal(existing.productsTotal);
+  let rawCommissionSum: Prisma.Decimal | null = null;
 
-  if (deliveryFeeChanged || platformFeeChanged) {
+  if (input.businesses !== undefined) {
+    const businessIds = input.businesses.map((group) => group.businessId);
+    if (new Set(businessIds).size !== businessIds.length) {
+      throw new BadRequestError('No se puede repetir el mismo negocio en un pedido');
+    }
+    const preparedGroups = await prepareBusinessGroups(input.businesses);
+    productsTotal = preparedGroups.reduce(
+      (acc, group) => acc.plus(group.subtotal),
+      new Prisma.Decimal(0),
+    );
+    rawCommissionSum = preparedGroups.reduce(
+      (acc, group) => acc.plus(group.commissionEarned),
+      new Prisma.Decimal(0),
+    );
+    data.productsTotal = productsTotal;
+    // Reemplazo completo: se borran los negocios/items anteriores y se crean los nuevos en la
+    // misma escritura de Prisma (atómico), en vez de ir línea por línea tratando de adivinar
+    // qué cambió.
+    data.businesses = {
+      deleteMany: {},
+      create: toBusinessesCreateInput(preparedGroups),
+    };
+  }
+
+  const deliveryFeeChanged = input.deliveryFee !== undefined;
+  const platformFeeOverrideChanged = input.platformFeeOverride !== undefined;
+
+  if (deliveryFeeChanged || platformFeeOverrideChanged || itemsChanged) {
     const deliveryFee =
       input.deliveryFee !== undefined
         ? new Prisma.Decimal(input.deliveryFee)
         : new Prisma.Decimal(existing.deliveryFee);
-    const platformFee =
-      input.platformFeeOverride !== undefined
-        ? new Prisma.Decimal(input.platformFeeOverride)
-        : new Prisma.Decimal(existing.platformFee);
+
+    // Prioridad: una anulación explícita en este mismo pedido de edición siempre gana. Si no
+    // se pidió una anulación pero los productos cambiaron, se recalcula el Servicio Tráelo a
+    // partir de las comisiones nuevas — de lo contrario queda como estaba.
+    let platformFee: Prisma.Decimal;
+    if (input.platformFeeOverride !== undefined) {
+      platformFee = new Prisma.Decimal(input.platformFeeOverride);
+    } else if (itemsChanged) {
+      platformFee = calc.roundUpToNearest10(rawCommissionSum ?? new Prisma.Decimal(0));
+    } else {
+      platformFee = new Prisma.Decimal(existing.platformFee);
+    }
 
     if (deliveryFeeChanged) data.deliveryFee = deliveryFee;
-    if (platformFeeChanged) data.platformFee = platformFee;
-    data.total = new Prisma.Decimal(existing.productsTotal).plus(deliveryFee).plus(platformFee);
+    if (platformFeeOverrideChanged || itemsChanged) data.platformFee = platformFee;
+    data.total = productsTotal.plus(deliveryFee).plus(platformFee);
 
     if (existing.delivererId) {
       const deliverer = await deliverersRepository.findById(existing.delivererId);
@@ -341,7 +394,7 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
         data.traeloDeliveryShare = traeloDeliveryShare;
         data.traeloEarning = platformFee.plus(traeloDeliveryShare);
       }
-    } else if (platformFeeChanged) {
+    } else if (platformFeeOverrideChanged || itemsChanged) {
       // Todavía no hay mensajero asignado: la ganancia de Tráelo es solo el Servicio Tráelo.
       data.traeloEarning = platformFee;
     }
