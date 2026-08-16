@@ -25,6 +25,11 @@ export const createOrderSchema = z.object({
   addressReference: z.string().max(200).optional(),
   customerPhone: z.string().min(6).max(30),
   deliveryFee: z.coerce.number().min(0),
+  // Anula el Servicio Tráelo calculado automáticamente (p.ej. 0 cuando no se cobró en este
+  // pedido puntual). Es un campo explícito y separado de `platformFee` (el de salida en el
+  // DTO) — el cliente nunca puede spoofear el valor calculado, solo pedir una excepción
+  // deliberada que el staff autorizado decide a mano.
+  platformFeeOverride: z.coerce.number().min(0).optional(),
   businesses: z.array(orderBusinessInputSchema).min(1),
 });
 
@@ -36,6 +41,7 @@ export const updateOrderSchema = z.object({
   addressReference: z.string().max(200).optional(),
   customerPhone: z.string().min(6).max(30).optional(),
   deliveryFee: z.coerce.number().min(0).optional(),
+  platformFeeOverride: z.coerce.number().min(0).optional(),
 });
 
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;

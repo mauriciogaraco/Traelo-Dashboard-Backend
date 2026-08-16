@@ -203,11 +203,19 @@ export async function createOrder(
     (acc, group) => acc.plus(group.commissionEarned),
     new Prisma.Decimal(0),
   );
-  const { productsTotal, platformFee, total } = calc.computeOrderTotals({
+  const { productsTotal, platformFee: computedPlatformFee } = calc.computeOrderTotals({
     subtotal,
     rawCommissionSum,
     deliveryFee,
   });
+  // El staff puede pedir una excepción puntual (p.ej. 0 cuando no se cobró el servicio en
+  // este pedido). El detalle sin redondear por negocio (commissionEarned) no se toca — sigue
+  // reflejando lo que cada negocio generó, para que las liquidaciones no pierdan precisión.
+  const platformFee =
+    input.platformFeeOverride !== undefined
+      ? new Prisma.Decimal(input.platformFeeOverride)
+      : computedPlatformFee;
+  const total = productsTotal.plus(deliveryFee).plus(platformFee);
 
   const order = await ordersRepository.create({
     customerName: input.customerName,
@@ -304,12 +312,22 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
     customerPhone: input.customerPhone,
   };
 
-  if (input.deliveryFee !== undefined) {
-    const deliveryFee = new Prisma.Decimal(input.deliveryFee);
-    data.deliveryFee = deliveryFee;
-    data.total = new Prisma.Decimal(existing.productsTotal)
-      .plus(deliveryFee)
-      .plus(existing.platformFee);
+  const deliveryFeeChanged = input.deliveryFee !== undefined;
+  const platformFeeChanged = input.platformFeeOverride !== undefined;
+
+  if (deliveryFeeChanged || platformFeeChanged) {
+    const deliveryFee =
+      input.deliveryFee !== undefined
+        ? new Prisma.Decimal(input.deliveryFee)
+        : new Prisma.Decimal(existing.deliveryFee);
+    const platformFee =
+      input.platformFeeOverride !== undefined
+        ? new Prisma.Decimal(input.platformFeeOverride)
+        : new Prisma.Decimal(existing.platformFee);
+
+    if (deliveryFeeChanged) data.deliveryFee = deliveryFee;
+    if (platformFeeChanged) data.platformFee = platformFee;
+    data.total = new Prisma.Decimal(existing.productsTotal).plus(deliveryFee).plus(platformFee);
 
     if (existing.delivererId) {
       const deliverer = await deliverersRepository.findById(existing.delivererId);
@@ -321,8 +339,11 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
         );
         data.delivererEarning = delivererShare;
         data.traeloDeliveryShare = traeloDeliveryShare;
-        data.traeloEarning = new Prisma.Decimal(existing.platformFee).plus(traeloDeliveryShare);
+        data.traeloEarning = platformFee.plus(traeloDeliveryShare);
       }
+    } else if (platformFeeChanged) {
+      // Todavía no hay mensajero asignado: la ganancia de Tráelo es solo el Servicio Tráelo.
+      data.traeloEarning = platformFee;
     }
   }
 
