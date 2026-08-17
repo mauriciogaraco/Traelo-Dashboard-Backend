@@ -406,6 +406,28 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   return toDTO(order);
 }
 
+export async function deleteOrder(id: string): Promise<void> {
+  const existing = await ordersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Pedido no encontrado');
+  }
+  // Un pedido COMPLETED puede ya formar parte de un cuadre — borrarlo corrompería esa
+  // liquidación. Para pedidos completados por error, cancelarlos no es una opción tampoco
+  // (mismo motivo); ese caso queda fuera de alcance de este endpoint.
+  if (existing.status === 'COMPLETED') {
+    throw new ConflictError(
+      'No se puede eliminar un pedido COMPLETED — puede formar parte de un cuadre ya generado',
+    );
+  }
+  // Defensivo: por diseño solo los pedidos COMPLETED entran a un cuadre, así que esto no
+  // debería dispararse nunca — pero evita un error crudo de FK si esa regla cambia.
+  const settlementLines = await ordersRepository.countSettlementLines(id);
+  if (settlementLines > 0) {
+    throw new ConflictError('No se puede eliminar un pedido que ya forma parte de un cuadre');
+  }
+  await ordersRepository.remove(id);
+}
+
 export async function assignOrder(id: string, input: AssignOrderInput): Promise<OrderDTO> {
   const existing = await ordersRepository.findById(id);
   if (!existing) {

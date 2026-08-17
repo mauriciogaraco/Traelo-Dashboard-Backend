@@ -39,3 +39,11 @@ export function count(where: Prisma.OrderWhereInput) {
 export function update(id: string, data: Prisma.OrderUpdateInput) {
   return prisma.order.update({ where: { id }, data, include: orderInclude });
 }
+
+export function remove(id: string) {
+  return prisma.order.delete({ where: { id } });
+}
+
+export function countSettlementLines(orderId: string) {
+  return prisma.settlementOrderLine.count({ where: { orderId } });
+}

@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { sendCreated, sendOk, sendPaginated, type IdParam } from '../../shared/http';
+import { sendCreated, sendNoContent, sendOk, sendPaginated, type IdParam } from '../../shared/http';
 import { UnauthorizedError } from '../../shared/errors';
 import { Role } from '../../generated/prisma/enums';
 import * as ordersService from './orders.service';
@@ -46,6 +46,12 @@ export async function updateOrder(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as IdParam;
   const order = await ordersService.updateOrder(id, req.body as UpdateOrderInput);
   sendOk(res, order);
+}
+
+export async function deleteOrder(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  await ordersService.deleteOrder(id);
+  sendNoContent(res);
 }
 
 export async function assignOrder(req: Request, res: Response): Promise<void> {

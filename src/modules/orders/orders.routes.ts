@@ -45,6 +45,13 @@ ordersRouter.patch(
   ordersController.updateOrder,
 );
 
+ordersRouter.delete(
+  '/:id',
+  authorize(Role.OWNER, Role.ADMIN),
+  validate({ params: idParamSchema }),
+  ordersController.deleteOrder,
+);
+
 ordersRouter.patch(
   '/:id/assign',
   authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
