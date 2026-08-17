@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from '../../shared/http';
+import { dateRangePreset } from '../../shared/date-range';
 import { OrderStatus } from '../../generated/prisma/enums';
 
 const orderItemInputSchema = z
@@ -65,6 +66,9 @@ export const listOrdersQuerySchema = paginationQuerySchema.extend({
   status: z.enum(OrderStatus).optional(),
   delivererId: z.cuid().optional(),
   businessId: z.cuid().optional(),
+  // Atajo de rango (hoy/semana/mes/6 meses/año/custom), igual que dashboard/reports. Si se
+  // omite junto con from/to, no se filtra por fecha ("todos").
+  range: dateRangePreset.optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });

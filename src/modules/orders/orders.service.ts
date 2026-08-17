@@ -1,6 +1,7 @@
 import { NotFoundError, BadRequestError, ConflictError, ForbiddenError } from '../../shared/errors';
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
+import { resolveDateRange } from '../../shared/date-range';
 import { Prisma } from '../../generated/prisma/client';
 import type { CommissionType, OrderStatus } from '../../generated/prisma/enums';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -278,18 +279,19 @@ export async function listOrders(
   query: ListOrdersQuery,
   scopeDelivererId?: string,
 ): Promise<{ data: OrderDTO[]; meta: PaginationMeta }> {
+  // "range" es el atajo (hoy/semana/mes/...); from/to solo sin range es un rango libre. Si no
+  // viene nada de esto, no se filtra por fecha ("todos").
+  const dateRange = query.range
+    ? resolveDateRange({ range: query.range, from: query.from, to: query.to })
+    : query.from || query.to
+      ? { from: query.from ?? new Date(0), to: query.to ?? new Date() }
+      : null;
+
   const where: Prisma.OrderWhereInput = {
     ...(query.status ? { status: query.status } : {}),
     ...(query.delivererId ? { delivererId: query.delivererId } : {}),
     ...(query.businessId ? { businesses: { some: { businessId: query.businessId } } } : {}),
-    ...(query.from || query.to
-      ? {
-          orderDate: {
-            ...(query.from ? { gte: query.from } : {}),
-            ...(query.to ? { lte: query.to } : {}),
-          },
-        }
-      : {}),
+    ...(dateRange ? { orderDate: { gte: dateRange.from, lte: dateRange.to } } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
   };
 
