@@ -88,3 +88,10 @@ export async function deactivateUser(id: string): Promise<UserDTO> {
   const user = await usersRepository.update(id, { active: false });
   return toDTO(user);
 }
+
+export async function resetPassword(id: string, password: string): Promise<UserDTO> {
+  await getUserById(id);
+  const passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+  const user = await usersRepository.update(id, { passwordHash });
+  return toDTO(user);
+}

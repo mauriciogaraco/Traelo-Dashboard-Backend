@@ -26,3 +26,9 @@ export const updateUserSchema = z.object({
 });
 
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+
+export const resetPasswordSchema = z.object({
+  password: z.string().min(8).max(72),
+});
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

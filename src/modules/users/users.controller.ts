@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { sendOk, sendPaginated, type IdParam } from '../../shared/http';
 import * as usersService from './users.service';
-import type { ListUsersQuery, UpdateUserInput } from './users.dto';
+import type { ListUsersQuery, ResetPasswordInput, UpdateUserInput } from './users.dto';
 
 export async function listUsers(req: Request, res: Response): Promise<void> {
   const query = req.query as unknown as ListUsersQuery;
@@ -25,5 +25,12 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
 export async function deactivateUser(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as IdParam;
   const user = await usersService.deactivateUser(id);
+  sendOk(res, user);
+}
+
+export async function resetPassword(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const { password } = req.body as ResetPasswordInput;
+  const user = await usersService.resetPassword(id, password);
   sendOk(res, user);
 }

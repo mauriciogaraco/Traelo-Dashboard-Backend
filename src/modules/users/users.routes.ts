@@ -5,7 +5,7 @@ import { validate } from '../../middlewares/validate';
 import { idParamSchema } from '../../shared/http';
 import { Role } from '../../generated/prisma/enums';
 import * as usersController from './users.controller';
-import { listUsersQuerySchema, updateUserSchema } from './users.dto';
+import { listUsersQuerySchema, resetPasswordSchema, updateUserSchema } from './users.dto';
 
 export const usersRouter = Router();
 
@@ -22,3 +22,9 @@ usersRouter.patch(
 );
 
 usersRouter.delete('/:id', validate({ params: idParamSchema }), usersController.deactivateUser);
+
+usersRouter.patch(
+  '/:id/password',
+  validate({ params: idParamSchema, body: resetPasswordSchema }),
+  usersController.resetPassword,
+);
