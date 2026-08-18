@@ -47,3 +47,9 @@ export function remove(id: string) {
 export function countSettlementLines(orderId: string) {
   return prisma.settlementOrderLine.count({ where: { orderId } });
 }
+
+export function countClosedSettlementLines(orderId: string) {
+  return prisma.settlementOrderLine.count({
+    where: { orderId, settlement: { status: 'CLOSED' } },
+  });
+}

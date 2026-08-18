@@ -320,8 +320,26 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   if (!existing) {
     throw new NotFoundError('Pedido no encontrado');
   }
-  if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
-    throw new ConflictError('No se puede editar un pedido COMPLETED o CANCELLED');
+  if (existing.status === 'CANCELLED') {
+    throw new ConflictError('No se puede editar un pedido CANCELLED');
+  }
+
+  // Un pedido COMPLETED sí se puede editar (p.ej. corregir dirección o productos después de
+  // entregado), pero si sus productos/montos ya se usaron para cerrar un cuadre, tocarlos
+  // desincronizaría esa liquidación ya cerrada — eso queda bloqueado. Los datos del cliente
+  // (nombre, dirección, teléfono) nunca afectan montos, así que siempre se pueden corregir.
+  const financialFieldsChanged =
+    input.businesses !== undefined ||
+    input.deliveryFee !== undefined ||
+    input.platformFeeOverride !== undefined;
+
+  if (existing.status === 'COMPLETED' && financialFieldsChanged) {
+    const closedSettlementLines = await ordersRepository.countClosedSettlementLines(id);
+    if (closedSettlementLines > 0) {
+      throw new ConflictError(
+        'No se pueden editar productos o montos de un pedido que ya forma parte de un cuadre cerrado',
+      );
+    }
   }
 
   const data: Prisma.OrderUpdateInput = {
