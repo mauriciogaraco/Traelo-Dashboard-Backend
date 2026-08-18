@@ -52,7 +52,7 @@ export function topDeliverersByDeliveries(range: DateRange, limit: number) {
       delivererId: { not: null },
     },
     _count: { id: true },
-    _sum: { delivererEarning: true },
+    _sum: { delivererEarning: true, platformFee: true },
     orderBy: { _count: { id: 'desc' } },
     take: limit,
   });

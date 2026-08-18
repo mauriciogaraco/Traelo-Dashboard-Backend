@@ -32,6 +32,7 @@ export interface TopDelivererDTO {
   delivererName: string;
   deliveryCount: number;
   totalEarnings: number;
+  platformFeeCollected: number;
 }
 
 export async function getSalesReport(query: DateRangeQuery): Promise<SalesReportDTO> {
@@ -103,5 +104,6 @@ export async function getTopDeliverers(query: TopReportsQuery): Promise<TopDeliv
     delivererName: nameById.get(group.delivererId) ?? 'Desconocido',
     deliveryCount: group._count.id,
     totalEarnings: decimalToNumber(group._sum.delivererEarning) ?? 0,
+    platformFeeCollected: decimalToNumber(group._sum.platformFee) ?? 0,
   }));
 }
