@@ -42,6 +42,13 @@ export async function getSettlement(req: Request, res: Response): Promise<void> 
   sendOk(res, settlement);
 }
 
+export async function getSettlementOrders(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const scopeDelivererId = await resolveDelivererScope(req);
+  const orders = await settlementsService.getSettlementOrders(id, scopeDelivererId);
+  sendOk(res, orders);
+}
+
 export async function closeSettlement(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     throw new UnauthorizedError();

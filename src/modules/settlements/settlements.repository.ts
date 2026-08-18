@@ -56,6 +56,30 @@ export function update(id: string, data: Prisma.SettlementUpdateInput) {
   return prisma.settlement.update({ where: { id }, data, include: settlementInclude });
 }
 
+export function findOrdersBySettlementId(settlementId: string) {
+  return prisma.order.findMany({
+    where: { settlementLines: { some: { settlementId } } },
+    select: {
+      id: true,
+      orderNumber: true,
+      customerName: true,
+      completedAt: true,
+      deliveryFee: true,
+      delivererEarning: true,
+      traeloDeliveryShare: true,
+      platformFee: true,
+      total: true,
+      businesses: {
+        select: {
+          businessNameSnapshot: true,
+          business: { select: { name: true } },
+        },
+      },
+    },
+    orderBy: { completedAt: 'asc' },
+  });
+}
+
 export function findEligibleOrders(delivererId: string, periodStart: Date, periodEnd: Date) {
   return prisma.order.findMany({
     where: {

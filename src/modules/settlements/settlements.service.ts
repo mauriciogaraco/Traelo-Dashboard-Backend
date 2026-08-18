@@ -171,6 +171,46 @@ export async function getSettlementById(
   return toDTO(settlement);
 }
 
+export interface SettlementOrderDTO {
+  id: string;
+  orderNumber: number;
+  customerName: string;
+  businessNames: string[];
+  completedAt: Date | null;
+  deliveryFee: number;
+  delivererEarning: number;
+  traeloDeliveryShare: number;
+  platformFee: number;
+  total: number;
+}
+
+export async function getSettlementOrders(
+  id: string,
+  scopeDelivererId?: string,
+): Promise<SettlementOrderDTO[]> {
+  const settlement = await settlementsRepository.findById(id);
+  if (!settlement) {
+    throw new NotFoundError('Cuadre no encontrado');
+  }
+  if (scopeDelivererId && settlement.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
+  }
+
+  const orders = await settlementsRepository.findOrdersBySettlementId(id);
+  return orders.map((order) => ({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    customerName: order.customerName,
+    businessNames: order.businesses.map((ob) => ob.businessNameSnapshot ?? ob.business.name),
+    completedAt: order.completedAt,
+    deliveryFee: decimalToNumber(order.deliveryFee),
+    delivererEarning: decimalToNumber(order.delivererEarning),
+    traeloDeliveryShare: decimalToNumber(order.traeloDeliveryShare),
+    platformFee: decimalToNumber(order.platformFee),
+    total: decimalToNumber(order.total),
+  }));
+}
+
 export async function closeSettlement(id: string, closedByUserId: string): Promise<SettlementDTO> {
   const existing = await settlementsRepository.findById(id);
   if (!existing) {

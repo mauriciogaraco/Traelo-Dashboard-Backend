@@ -39,6 +39,13 @@ settlementsRouter.get(
   settlementsController.getSettlement,
 );
 
+settlementsRouter.get(
+  '/:id/orders',
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.DELIVERER),
+  validate({ params: idParamSchema }),
+  settlementsController.getSettlementOrders,
+);
+
 settlementsRouter.post(
   '/:id/close',
   authorize(Role.OWNER, Role.ADMIN),
