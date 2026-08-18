@@ -7,6 +7,7 @@ import { Role } from '../../generated/prisma/enums';
 import * as ordersController from './orders.controller';
 import {
   assignOrderSchema,
+  bulkCompleteOrdersSchema,
   createOrderSchema,
   listOrdersQuerySchema,
   updateOrderSchema,
@@ -22,6 +23,13 @@ ordersRouter.get(
   authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.DELIVERER),
   validate({ query: listOrdersQuerySchema }),
   ordersController.listOrders,
+);
+
+ordersRouter.patch(
+  '/bulk/complete',
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  validate({ body: bulkCompleteOrdersSchema }),
+  ordersController.bulkCompleteOrders,
 );
 
 ordersRouter.post(

@@ -62,6 +62,12 @@ export const updateOrderStatusSchema = z.object({
 
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
 
+export const bulkCompleteOrdersSchema = z.object({
+  ids: z.array(z.cuid()).min(1).max(100),
+});
+
+export type BulkCompleteOrdersInput = z.infer<typeof bulkCompleteOrdersSchema>;
+
 export const listOrdersQuerySchema = paginationQuerySchema.extend({
   status: z.enum(OrderStatus).optional(),
   delivererId: z.cuid().optional(),

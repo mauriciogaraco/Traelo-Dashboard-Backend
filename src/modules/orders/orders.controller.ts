@@ -6,6 +6,7 @@ import * as ordersService from './orders.service';
 import * as deliverersService from '../deliverers/deliverers.service';
 import type {
   AssignOrderInput,
+  BulkCompleteOrdersInput,
   CreateOrderInput,
   ListOrdersQuery,
   UpdateOrderInput,
@@ -64,4 +65,10 @@ export async function updateOrderStatus(req: Request, res: Response): Promise<vo
   const { id } = req.params as unknown as IdParam;
   const order = await ordersService.updateOrderStatus(id, req.body as UpdateOrderStatusInput);
   sendOk(res, order);
+}
+
+export async function bulkCompleteOrders(req: Request, res: Response): Promise<void> {
+  const { ids } = req.body as BulkCompleteOrdersInput;
+  const result = await ordersService.bulkCompleteOrders(ids);
+  sendOk(res, result);
 }

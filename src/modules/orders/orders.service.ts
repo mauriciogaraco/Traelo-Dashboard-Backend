@@ -489,3 +489,36 @@ export async function updateOrderStatus(
   const order = await ordersRepository.update(id, { status: 'CANCELLED', cancelledAt: new Date() });
   return toDTO(order);
 }
+
+export interface BulkCompleteOrdersDTO {
+  completed: OrderDTO[];
+  skipped: { id: string; reason: string }[];
+}
+
+// Por bulto desde la lista: procesa cada id independientemente en vez de fallar todo el lote
+// por un pedido que no esté en ASSIGNED, así el staff puede seleccionar una página entera sin
+// tener que separar a mano los que sí están listos.
+export async function bulkCompleteOrders(ids: string[]): Promise<BulkCompleteOrdersDTO> {
+  const uniqueIds = Array.from(new Set(ids));
+  const completed: OrderDTO[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+
+  for (const id of uniqueIds) {
+    const existing = await ordersRepository.findById(id);
+    if (!existing) {
+      skipped.push({ id, reason: 'Pedido no encontrado' });
+      continue;
+    }
+    if (existing.status !== 'ASSIGNED') {
+      skipped.push({ id, reason: 'Solo se puede completar un pedido en estado ASSIGNED' });
+      continue;
+    }
+    const order = await ordersRepository.update(id, {
+      status: 'COMPLETED',
+      completedAt: new Date(),
+    });
+    completed.push(toDTO(order));
+  }
+
+  return { completed, skipped };
+}
