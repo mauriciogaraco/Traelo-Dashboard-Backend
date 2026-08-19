@@ -120,11 +120,21 @@ export async function listSettlements(
   query: ListSettlementsQuery,
   scopeDelivererId?: string,
 ): Promise<{ data: SettlementDTO[]; meta: PaginationMeta }> {
+  // "range" filtra por superposición del periodo del cuadre con hoy/esta semana (hora de La
+  // Habana) — no por cuándo se generó, sino por a qué día(s) corresponde.
+  const rangeBounds =
+    query.range === 'today'
+      ? { from: startOfBusinessDay(new Date()), to: endOfBusinessDay(new Date()) }
+      : query.range === 'week'
+        ? { from: startOfBusinessIsoWeek(new Date()), to: endOfBusinessIsoWeek(new Date()) }
+        : null;
+
   const where: Prisma.SettlementWhereInput = {
     ...(query.type ? { type: query.type } : {}),
     ...(query.status ? { status: query.status } : {}),
     ...(query.delivererId ? { delivererId: query.delivererId } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
+    ...(rangeBounds ? { periodStart: { lte: rangeBounds.to }, periodEnd: { gte: rangeBounds.from } } : {}),
   };
 
   const { skip, take } = toSkipTake(query);

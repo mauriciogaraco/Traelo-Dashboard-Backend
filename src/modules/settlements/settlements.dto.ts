@@ -22,6 +22,8 @@ export const listSettlementsQuerySchema = paginationQuerySchema.extend({
   delivererId: z.cuid().optional(),
   type: z.enum(SettlementType).optional(),
   status: z.enum(SettlementStatus).optional(),
+  // Filtra por cuadres cuyo periodo se superpone con "hoy"/"esta semana" (hora de La Habana).
+  range: z.enum(['today', 'week']).optional(),
 });
 
 export type ListSettlementsQuery = z.infer<typeof listSettlementsQuerySchema>;
