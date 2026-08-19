@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
-import { sendOk } from '../../shared/http';
+import { sendOk, sendPaginated, type IdParam } from '../../shared/http';
 import * as reportsService from './reports.service';
-import type { ReportsQuery, TopReportsQuery } from './reports.dto';
+import type { ListReportsQuery, ReportsQuery, TopReportsQuery } from './reports.dto';
 
 export async function getSalesReport(req: Request, res: Response): Promise<void> {
   const query = req.query as unknown as ReportsQuery;
@@ -19,4 +19,30 @@ export async function getTopDeliverers(req: Request, res: Response): Promise<voi
   const query = req.query as unknown as TopReportsQuery;
   const report = await reportsService.getTopDeliverers(query);
   sendOk(res, report);
+}
+
+export async function getAllBusinesses(req: Request, res: Response): Promise<void> {
+  const query = req.query as unknown as ListReportsQuery;
+  const { data, meta } = await reportsService.getAllBusinesses(query);
+  sendPaginated(res, data, meta);
+}
+
+export async function getBusinessSalesDetail(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const query = req.query as unknown as ReportsQuery;
+  const detail = await reportsService.getBusinessSalesDetail(id, query);
+  sendOk(res, detail);
+}
+
+export async function getAllDeliverers(req: Request, res: Response): Promise<void> {
+  const query = req.query as unknown as ListReportsQuery;
+  const { data, meta } = await reportsService.getAllDeliverers(query);
+  sendPaginated(res, data, meta);
+}
+
+export async function getDelivererSalesDetail(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const query = req.query as unknown as ReportsQuery;
+  const detail = await reportsService.getDelivererSalesDetail(id, query);
+  sendOk(res, detail);
 }

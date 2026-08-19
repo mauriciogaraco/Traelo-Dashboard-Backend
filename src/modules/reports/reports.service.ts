@@ -1,7 +1,11 @@
 import { decimalToNumber } from '../../shared/prisma';
 import { resolveDateRange, type DateRangeQuery } from '../../shared/date-range';
+import { NotFoundError } from '../../shared/errors';
+import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
+import * as businessesRepository from '../businesses/businesses.repository';
+import * as deliverersRepository from '../deliverers/deliverers.repository';
 import * as reportsRepository from './reports.repository';
-import type { TopReportsQuery } from './reports.dto';
+import type { ListReportsQuery, TopReportsQuery } from './reports.dto';
 
 export interface SalesReportDTO {
   totalOrders: number;
@@ -33,6 +37,22 @@ export interface TopDelivererDTO {
   deliveryCount: number;
   totalEarnings: number;
   platformFeeCollected: number;
+}
+
+export interface BusinessSalesDetailDTO {
+  businessId: string;
+  businessName: string;
+  totalSales: number;
+  totalCommission: number;
+  orderCount: number;
+  averageSale: number;
+  maxSale: number;
+  topProducts: {
+    productId: string | null;
+    productName: string;
+    quantitySold: number;
+    totalSales: number;
+  }[];
 }
 
 export async function getSalesReport(query: DateRangeQuery): Promise<SalesReportDTO> {
@@ -106,4 +126,121 @@ export async function getTopDeliverers(query: TopReportsQuery): Promise<TopDeliv
     totalEarnings: decimalToNumber(group._sum.delivererEarning) ?? 0,
     platformFeeCollected: decimalToNumber(group._sum.platformFee) ?? 0,
   }));
+}
+
+export async function getAllBusinesses(
+  query: ListReportsQuery,
+): Promise<{ data: TopBusinessDTO[]; meta: PaginationMeta }> {
+  const range = resolveDateRange(query);
+  const { skip, take } = toSkipTake(query);
+  const [grouped, total] = await Promise.all([
+    reportsRepository.listBusinessesByRevenue(range, { skip, take, search: query.search }),
+    reportsRepository.countBusinessesWithSales(range, query.search),
+  ]);
+
+  if (grouped.length === 0) {
+    return { data: [], meta: buildPaginationMeta(query, total) };
+  }
+
+  const businesses = await reportsRepository.findBusinessNames(grouped.map((group) => group.businessId));
+  const nameById = new Map(businesses.map((business) => [business.id, business.name]));
+
+  const data = grouped.map((group) => ({
+    businessId: group.businessId,
+    businessName: nameById.get(group.businessId) ?? 'Desconocido',
+    totalSales: decimalToNumber(group._sum.subtotal) ?? 0,
+    totalCommission: decimalToNumber(group._sum.commissionEarned) ?? 0,
+    orderCount: group._count._all,
+  }));
+
+  return { data, meta: buildPaginationMeta(query, total) };
+}
+
+export async function getBusinessSalesDetail(
+  businessId: string,
+  query: DateRangeQuery,
+): Promise<BusinessSalesDetailDTO> {
+  const business = await businessesRepository.findById(businessId);
+  if (!business) {
+    throw new NotFoundError('Negocio no encontrado');
+  }
+
+  const range = resolveDateRange(query);
+  const [aggregate, topProducts] = await Promise.all([
+    reportsRepository.getBusinessSalesAggregate(businessId, range),
+    reportsRepository.getTopProductsForBusiness(businessId, range, 10),
+  ]);
+
+  const totalSales = decimalToNumber(aggregate._sum.subtotal) ?? 0;
+  const orderCount = aggregate._count._all;
+
+  return {
+    businessId,
+    businessName: business.name,
+    totalSales,
+    totalCommission: decimalToNumber(aggregate._sum.commissionEarned) ?? 0,
+    orderCount,
+    averageSale: orderCount > 0 ? totalSales / orderCount : 0,
+    maxSale: decimalToNumber(aggregate._max.subtotal) ?? 0,
+    topProducts: topProducts.map((product) => ({
+      productId: product.productId,
+      productName: product.productName,
+      quantitySold: product._sum.quantity ?? 0,
+      totalSales: decimalToNumber(product._sum.subtotal) ?? 0,
+    })),
+  };
+}
+
+export async function getAllDeliverers(
+  query: ListReportsQuery,
+): Promise<{ data: TopDelivererDTO[]; meta: PaginationMeta }> {
+  const range = resolveDateRange(query);
+  const { skip, take } = toSkipTake(query);
+  const [grouped, total] = await Promise.all([
+    reportsRepository.listDeliverersByDeliveries(range, { skip, take, search: query.search }),
+    reportsRepository.countDeliverersWithDeliveries(range, query.search),
+  ]);
+
+  const withDeliverer = grouped.filter(
+    (group): group is typeof group & { delivererId: string } => group.delivererId !== null,
+  );
+  if (withDeliverer.length === 0) {
+    return { data: [], meta: buildPaginationMeta(query, total) };
+  }
+
+  const deliverers = await reportsRepository.findDelivererNames(
+    withDeliverer.map((group) => group.delivererId),
+  );
+  const nameById = new Map(deliverers.map((deliverer) => [deliverer.id, deliverer.user.name]));
+
+  const data = withDeliverer.map((group) => ({
+    delivererId: group.delivererId,
+    delivererName: nameById.get(group.delivererId) ?? 'Desconocido',
+    deliveryCount: group._count.id,
+    totalEarnings: decimalToNumber(group._sum.delivererEarning) ?? 0,
+    platformFeeCollected: decimalToNumber(group._sum.platformFee) ?? 0,
+  }));
+
+  return { data, meta: buildPaginationMeta(query, total) };
+}
+
+export async function getDelivererSalesDetail(
+  delivererId: string,
+  query: DateRangeQuery,
+): Promise<TopDelivererDTO> {
+  const deliverer = await deliverersRepository.findById(delivererId);
+  if (!deliverer) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  const range = resolveDateRange(query);
+  const aggregate = await reportsRepository.getDelivererSalesAggregate(delivererId, range);
+
+  return {
+    delivererId,
+    delivererName: deliverer.user.name,
+    deliveryCount: aggregate._count._all,
+    totalEarnings: decimalToNumber(aggregate._sum.delivererEarning) ?? 0,
+    platformFeeCollected: decimalToNumber(aggregate._sum.platformFee) ?? 0,
+  };
 }

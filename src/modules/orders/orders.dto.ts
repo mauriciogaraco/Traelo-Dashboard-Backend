@@ -72,6 +72,7 @@ export const listOrdersQuerySchema = paginationQuerySchema.extend({
   status: z.enum(OrderStatus).optional(),
   delivererId: z.cuid().optional(),
   businessId: z.cuid().optional(),
+  search: z.string().trim().min(1).optional(),
   // Atajo de rango (hoy/semana/mes/6 meses/año/custom), igual que dashboard/reports. Si se
   // omite junto con from/to, no se filtra por fecha ("todos").
   range: dateRangePreset.optional(),

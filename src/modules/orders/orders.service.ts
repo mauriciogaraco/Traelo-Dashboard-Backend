@@ -291,6 +291,7 @@ export async function listOrders(
     ...(query.status ? { status: query.status } : {}),
     ...(query.delivererId ? { delivererId: query.delivererId } : {}),
     ...(query.businessId ? { businesses: { some: { businessId: query.businessId } } } : {}),
+    ...(query.search ? { customerName: { contains: query.search, mode: 'insensitive' } } : {}),
     ...(dateRange ? { orderDate: { gte: dateRange.from, lte: dateRange.to } } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
   };
