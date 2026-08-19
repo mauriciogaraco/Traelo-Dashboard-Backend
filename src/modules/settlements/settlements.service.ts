@@ -1,6 +1,12 @@
 import { NotFoundError, ConflictError, ForbiddenError } from '../../shared/errors';
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
+import {
+  startOfBusinessDay,
+  endOfBusinessDay,
+  startOfBusinessIsoWeek,
+  endOfBusinessIsoWeek,
+} from '../../shared/date-range';
 import type { Prisma } from '../../generated/prisma/client';
 import type { SettlementStatus, SettlementType } from '../../generated/prisma/enums';
 import * as deliverersRepository from '../deliverers/deliverers.repository';
@@ -53,33 +59,6 @@ function toDTO(settlement: SettlementWithRelations): SettlementDTO {
   };
 }
 
-function startOfDay(date: Date): Date {
-  const result = new Date(date);
-  result.setHours(0, 0, 0, 0);
-  return result;
-}
-
-function endOfDay(date: Date): Date {
-  const result = new Date(date);
-  result.setHours(23, 59, 59, 999);
-  return result;
-}
-
-function startOfIsoWeek(date: Date): Date {
-  const start = startOfDay(date);
-  const day = start.getDay();
-  const diffToMonday = (day === 0 ? -6 : 1) - day;
-  start.setDate(start.getDate() + diffToMonday);
-  return start;
-}
-
-function endOfIsoWeek(date: Date): Date {
-  const start = startOfIsoWeek(date);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  return endOfDay(end);
-}
-
 async function generateSettlement(
   delivererId: string,
   type: SettlementType,
@@ -120,8 +99,8 @@ export async function generateDailySettlement(
   return generateSettlement(
     input.delivererId,
     'DAILY',
-    startOfDay(referenceDate),
-    endOfDay(referenceDate),
+    startOfBusinessDay(referenceDate),
+    endOfBusinessDay(referenceDate),
   );
 }
 
@@ -132,8 +111,8 @@ export async function generateWeeklySettlement(
   return generateSettlement(
     input.delivererId,
     'WEEKLY',
-    startOfIsoWeek(referenceDate),
-    endOfIsoWeek(referenceDate),
+    startOfBusinessIsoWeek(referenceDate),
+    endOfBusinessIsoWeek(referenceDate),
   );
 }
 
