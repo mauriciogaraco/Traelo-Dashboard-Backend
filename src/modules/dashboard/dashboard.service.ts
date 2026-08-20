@@ -46,3 +46,33 @@ export async function getDashboardSummary(query: DateRangeQuery): Promise<Dashbo
     topDeliverer: topDeliverers[0] ?? null,
   };
 }
+
+// Vista reducida para el rol DELIVERER: nunca debe incluir las ganancias totales de Tráelo
+// (ni "Servicio Tráelo" ni la parte de Tráelo en la mensajería) — se calcula aparte en vez de
+// simplemente ocultar campos en el frontend, porque esos números no deben ni salir en la
+// respuesta de la API para ese rol.
+export interface DelivererDashboardSummaryDTO {
+  totalOrders: number;
+  completedOrders: number;
+  averageTicket: number;
+  topBusiness: TopBusinessDTO | null;
+  topDeliverer: TopDelivererDTO | null;
+}
+
+export async function getDelivererDashboardSummary(
+  query: DateRangeQuery,
+): Promise<DelivererDashboardSummaryDTO> {
+  const [sales, topBusinesses, topDeliverers] = await Promise.all([
+    reportsService.getSalesReport(query),
+    reportsService.getTopBusinesses({ ...query, limit: 1 }),
+    reportsService.getTopDeliverers({ ...query, limit: 1 }),
+  ]);
+
+  return {
+    totalOrders: sales.totalOrders,
+    completedOrders: sales.completedOrders,
+    averageTicket: sales.averageTicket,
+    topBusiness: topBusinesses[0] ?? null,
+    topDeliverer: topDeliverers[0] ?? null,
+  };
+}

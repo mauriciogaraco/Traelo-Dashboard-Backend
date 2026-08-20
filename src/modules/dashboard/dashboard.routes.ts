@@ -11,7 +11,7 @@ export const dashboardRouter = Router();
 dashboardRouter.get(
   '/summary',
   authenticate,
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.DELIVERER),
   validate({ query: reportsQuerySchema }),
   dashboardController.getSummary,
 );
