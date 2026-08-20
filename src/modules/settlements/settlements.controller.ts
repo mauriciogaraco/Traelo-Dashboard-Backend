@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { sendCreated, sendOk, sendPaginated, type IdParam } from '../../shared/http';
+import { sendCreated, sendNoContent, sendOk, sendPaginated, type IdParam } from '../../shared/http';
 import { UnauthorizedError } from '../../shared/errors';
 import { Role } from '../../generated/prisma/enums';
 import * as settlementsService from './settlements.service';
@@ -56,4 +56,10 @@ export async function closeSettlement(req: Request, res: Response): Promise<void
   const { id } = req.params as unknown as IdParam;
   const settlement = await settlementsService.closeSettlement(id, req.user.sub);
   sendOk(res, settlement);
+}
+
+export async function deleteSettlement(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  await settlementsService.deleteSettlement(id);
+  sendNoContent(res);
 }

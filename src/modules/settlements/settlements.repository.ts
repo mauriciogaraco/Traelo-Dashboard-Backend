@@ -56,6 +56,10 @@ export function update(id: string, data: Prisma.SettlementUpdateInput) {
   return prisma.settlement.update({ where: { id }, data, include: settlementInclude });
 }
 
+export function remove(id: string) {
+  return prisma.settlement.delete({ where: { id } });
+}
+
 export function findOrdersBySettlementId(settlementId: string) {
   return prisma.order.findMany({
     where: { settlementLines: { some: { settlementId } } },

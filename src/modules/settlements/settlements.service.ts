@@ -217,3 +217,17 @@ export async function closeSettlement(id: string, closedByUserId: string): Promi
 
   return toDTO(settlement);
 }
+
+export async function deleteSettlement(id: string): Promise<void> {
+  const existing = await settlementsRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Cuadre no encontrado');
+  }
+  // Un cuadre cerrado representa una liquidación ya dada por buena con el mensajero — borrarlo
+  // perdería ese registro para siempre. Los abiertos son solo una vista previa recalculable.
+  if (existing.status === 'CLOSED') {
+    throw new ConflictError('No se puede eliminar un cuadre cerrado');
+  }
+
+  await settlementsRepository.remove(id);
+}

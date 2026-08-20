@@ -52,3 +52,10 @@ settlementsRouter.post(
   validate({ params: idParamSchema }),
   settlementsController.closeSettlement,
 );
+
+settlementsRouter.delete(
+  '/:id',
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  validate({ params: idParamSchema }),
+  settlementsController.deleteSettlement,
+);
