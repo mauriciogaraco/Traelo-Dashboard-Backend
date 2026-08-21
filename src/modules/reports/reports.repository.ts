@@ -166,3 +166,30 @@ export function getDelivererSalesAggregate(delivererId: string, range: DateRange
     _sum: { delivererEarning: true, platformFee: true },
   });
 }
+
+// Sin agregación de Prisma: `delivererId` vive en Order, no en OrderItem, así que no se puede
+// agrupar por mensajero + producto en una sola query de groupBy. Se trae cada pedido completado
+// de este negocio en el rango (con sus items) y se suma por (mensajero, producto) en JS — el
+// volumen esperado (pedidos de un solo negocio en un periodo) es chico.
+export function getBusinessOrdersForDelivererBreakdown(businessId: string, range: DateRange) {
+  return prisma.order.findMany({
+    where: {
+      status: 'COMPLETED',
+      completedAt: { gte: range.from, lte: range.to },
+      delivererId: { not: null },
+      businesses: { some: { businessId } },
+    },
+    select: {
+      delivererId: true,
+      deliverer: { select: { user: { select: { name: true } } } },
+      businesses: {
+        where: { businessId },
+        select: {
+          items: {
+            select: { productId: true, productName: true, quantity: true, subtotal: true },
+          },
+        },
+      },
+    },
+  });
+}

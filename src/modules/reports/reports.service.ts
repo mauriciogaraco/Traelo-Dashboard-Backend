@@ -224,6 +224,82 @@ export async function getAllDeliverers(
   return { data, meta: buildPaginationMeta(query, total) };
 }
 
+export interface BusinessDelivererProductDTO {
+  productId: string | null;
+  productName: string;
+  quantity: number;
+  totalSales: number;
+}
+
+export interface BusinessDelivererBreakdownDTO {
+  delivererId: string;
+  delivererName: string;
+  products: BusinessDelivererProductDTO[];
+  totalQuantity: number;
+  totalSales: number;
+}
+
+export async function getBusinessBreakdownByDeliverer(
+  businessId: string,
+  query: DateRangeQuery,
+): Promise<BusinessDelivererBreakdownDTO[]> {
+  const business = await businessesRepository.findById(businessId);
+  if (!business) {
+    throw new NotFoundError('Negocio no encontrado');
+  }
+
+  const range = resolveDateRange(query);
+  const orders = await reportsRepository.getBusinessOrdersForDelivererBreakdown(businessId, range);
+
+  const byDeliverer = new Map<
+    string,
+    { delivererName: string; products: Map<string, BusinessDelivererProductDTO> }
+  >();
+
+  for (const order of orders) {
+    const delivererId = order.delivererId;
+    if (!delivererId) continue;
+
+    let entry = byDeliverer.get(delivererId);
+    if (!entry) {
+      entry = { delivererName: order.deliverer?.user.name ?? 'Desconocido', products: new Map() };
+      byDeliverer.set(delivererId, entry);
+    }
+
+    for (const item of order.businesses[0]?.items ?? []) {
+      const key = `${item.productId ?? ''}::${item.productName}`;
+      const subtotal = decimalToNumber(item.subtotal) ?? 0;
+      const existingProduct = entry.products.get(key);
+      if (existingProduct) {
+        existingProduct.quantity += item.quantity;
+        existingProduct.totalSales += subtotal;
+      } else {
+        entry.products.set(key, {
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          totalSales: subtotal,
+        });
+      }
+    }
+  }
+
+  return Array.from(byDeliverer.entries())
+    .map(([delivererId, entry]) => {
+      const products = Array.from(entry.products.values()).sort((a, b) =>
+        a.productName.localeCompare(b.productName),
+      );
+      return {
+        delivererId,
+        delivererName: entry.delivererName,
+        products,
+        totalQuantity: products.reduce((sum, p) => sum + p.quantity, 0),
+        totalSales: products.reduce((sum, p) => sum + p.totalSales, 0),
+      };
+    })
+    .sort((a, b) => b.totalSales - a.totalSales);
+}
+
 export async function getDelivererSalesDetail(
   delivererId: string,
   query: DateRangeQuery,

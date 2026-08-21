@@ -52,3 +52,9 @@ reportsRouter.get(
   validate({ params: idParamSchema, query: reportsQuerySchema }),
   reportsController.getDelivererSalesDetail,
 );
+
+reportsRouter.get(
+  '/businesses/:id/by-deliverer',
+  validate({ params: idParamSchema, query: reportsQuerySchema }),
+  reportsController.getBusinessBreakdownByDeliverer,
+);

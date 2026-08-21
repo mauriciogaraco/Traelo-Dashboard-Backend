@@ -46,3 +46,10 @@ export async function getDelivererSalesDetail(req: Request, res: Response): Prom
   const detail = await reportsService.getDelivererSalesDetail(id, query);
   sendOk(res, detail);
 }
+
+export async function getBusinessBreakdownByDeliverer(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const query = req.query as unknown as ReportsQuery;
+  const breakdown = await reportsService.getBusinessBreakdownByDeliverer(id, query);
+  sendOk(res, breakdown);
+}
