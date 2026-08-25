@@ -167,6 +167,22 @@ export function getDelivererSalesAggregate(delivererId: string, range: DateRange
   });
 }
 
+// `businessId` vive en OrderBusiness, no en OrderItem, así que no se puede agrupar por
+// (negocio, producto) en un solo groupBy de Prisma — se trae cada línea vendida en el rango y
+// se suma por (negocio, producto) en JS, igual que el desglose de Cronos por mensajero.
+export function getOrderItemsForTopProducts(range: DateRange) {
+  return prisma.orderBusiness.findMany({
+    where: { order: { status: 'COMPLETED', completedAt: { gte: range.from, lte: range.to } } },
+    select: {
+      businessId: true,
+      business: { select: { name: true } },
+      items: {
+        select: { productId: true, productName: true, quantity: true, subtotal: true },
+      },
+    },
+  });
+}
+
 export function getCustomerOrderTotals(range: DateRange) {
   return prisma.order.groupBy({
     by: ['customerPhone'],

@@ -59,6 +59,12 @@ reportsRouter.get(
 );
 
 reportsRouter.get(
+  '/top-products',
+  validate({ query: topReportsQuerySchema }),
+  reportsController.getTopProducts,
+);
+
+reportsRouter.get(
   '/customers',
   validate({ query: topCustomersQuerySchema }),
   reportsController.getTopCustomers,

@@ -47,6 +47,12 @@ export async function getDelivererSalesDetail(req: Request, res: Response): Prom
   sendOk(res, detail);
 }
 
+export async function getTopProducts(req: Request, res: Response): Promise<void> {
+  const query = req.query as unknown as TopReportsQuery;
+  const report = await reportsService.getTopProducts(query);
+  sendOk(res, report);
+}
+
 export async function getTopCustomers(req: Request, res: Response): Promise<void> {
   const query = req.query as unknown as TopCustomersQuery;
   const report = await reportsService.getTopCustomers(query);

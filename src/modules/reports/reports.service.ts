@@ -7,6 +7,46 @@ import * as deliverersRepository from '../deliverers/deliverers.repository';
 import * as reportsRepository from './reports.repository';
 import type { ListReportsQuery, TopCustomersQuery, TopReportsQuery } from './reports.dto';
 
+export interface TopProductDTO {
+  businessId: string;
+  businessName: string;
+  productId: string | null;
+  productName: string;
+  quantity: number;
+  totalSales: number;
+}
+
+export async function getTopProducts(query: TopReportsQuery): Promise<TopProductDTO[]> {
+  const range = resolveDateRange(query);
+  const orderBusinesses = await reportsRepository.getOrderItemsForTopProducts(range);
+
+  const byProduct = new Map<string, TopProductDTO>();
+  for (const ob of orderBusinesses) {
+    for (const item of ob.items) {
+      const key = `${ob.businessId}::${item.productId ?? ''}::${item.productName}`;
+      const subtotal = decimalToNumber(item.subtotal) ?? 0;
+      const existing = byProduct.get(key);
+      if (existing) {
+        existing.quantity += item.quantity;
+        existing.totalSales += subtotal;
+      } else {
+        byProduct.set(key, {
+          businessId: ob.businessId,
+          businessName: ob.business.name,
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          totalSales: subtotal,
+        });
+      }
+    }
+  }
+
+  return Array.from(byProduct.values())
+    .sort((a, b) => b.quantity - a.quantity)
+    .slice(0, query.limit);
+}
+
 export interface SalesReportDTO {
   totalOrders: number;
   completedOrders: number;
