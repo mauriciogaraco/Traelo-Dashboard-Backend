@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { sendOk, sendPaginated, type IdParam } from '../../shared/http';
 import * as reportsService from './reports.service';
-import type { ListReportsQuery, ReportsQuery, TopReportsQuery } from './reports.dto';
+import type { ListReportsQuery, ReportsQuery, TopCustomersQuery, TopReportsQuery } from './reports.dto';
 
 export async function getSalesReport(req: Request, res: Response): Promise<void> {
   const query = req.query as unknown as ReportsQuery;
@@ -45,6 +45,12 @@ export async function getDelivererSalesDetail(req: Request, res: Response): Prom
   const query = req.query as unknown as ReportsQuery;
   const detail = await reportsService.getDelivererSalesDetail(id, query);
   sendOk(res, detail);
+}
+
+export async function getTopCustomers(req: Request, res: Response): Promise<void> {
+  const query = req.query as unknown as TopCustomersQuery;
+  const report = await reportsService.getTopCustomers(query);
+  sendOk(res, report);
 }
 
 export async function getBusinessBreakdownByDeliverer(req: Request, res: Response): Promise<void> {

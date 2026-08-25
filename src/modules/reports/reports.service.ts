@@ -5,7 +5,7 @@ import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shar
 import * as businessesRepository from '../businesses/businesses.repository';
 import * as deliverersRepository from '../deliverers/deliverers.repository';
 import * as reportsRepository from './reports.repository';
-import type { ListReportsQuery, TopReportsQuery } from './reports.dto';
+import type { ListReportsQuery, TopCustomersQuery, TopReportsQuery } from './reports.dto';
 
 export interface SalesReportDTO {
   totalOrders: number;
@@ -222,6 +222,63 @@ export async function getAllDeliverers(
   }));
 
   return { data, meta: buildPaginationMeta(query, total) };
+}
+
+export interface CustomerReportDTO {
+  customerPhone: string;
+  customerName: string;
+  orderCount: number;
+  totalSpent: number;
+  platformFeeContribution: number;
+  traeloDeliveryShareContribution: number;
+  traeloContributionTotal: number;
+}
+
+// "Clientes recurrentes": solo entran los que hicieron 2+ pedidos completados en el rango — un
+// cliente de un solo pedido grande no debería aparecer en un ranking pensado para identificar
+// recurrencia, aunque haya gastado mucho.
+const MIN_ORDERS_TO_BE_RECURRING = 2;
+
+export async function getTopCustomers(query: TopCustomersQuery): Promise<CustomerReportDTO[]> {
+  const range = resolveDateRange(query);
+  const grouped = await reportsRepository.getCustomerOrderTotals(range);
+  if (grouped.length === 0) {
+    return [];
+  }
+
+  const names = await reportsRepository.findLatestCustomerNames(
+    grouped.map((group) => group.customerPhone),
+  );
+  const nameByPhone = new Map(names.map((n) => [n.customerPhone, n.customerName]));
+
+  const rows: CustomerReportDTO[] = grouped
+    .map((group) => {
+      const platformFeeContribution = decimalToNumber(group._sum.platformFee) ?? 0;
+      const traeloDeliveryShareContribution = decimalToNumber(group._sum.traeloDeliveryShare) ?? 0;
+      return {
+        customerPhone: group.customerPhone,
+        customerName: nameByPhone.get(group.customerPhone) ?? group.customerPhone,
+        orderCount: group._count._all,
+        totalSpent: decimalToNumber(group._sum.total) ?? 0,
+        platformFeeContribution,
+        traeloDeliveryShareContribution,
+        traeloContributionTotal: platformFeeContribution + traeloDeliveryShareContribution,
+      };
+    })
+    .filter((row) => row.orderCount >= MIN_ORDERS_TO_BE_RECURRING);
+
+  // No se puede ordenar por "platformFee + traeloDeliveryShare" dentro de un groupBy de Prisma
+  // (solo admite un campo agregado a la vez), así que se ordena en JS sobre el resultado ya
+  // combinado — volumen esperado (clientes distintos en un periodo) es chico.
+  const sortKey =
+    query.sortBy === 'orderCount'
+      ? 'orderCount'
+      : query.sortBy === 'totalSpent'
+        ? 'totalSpent'
+        : 'traeloContributionTotal';
+  rows.sort((a, b) => b[sortKey] - a[sortKey]);
+
+  return rows.slice(0, query.limit);
 }
 
 export interface BusinessDelivererProductDTO {

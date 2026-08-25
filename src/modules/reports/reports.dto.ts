@@ -14,3 +14,11 @@ export const listReportsQuerySchema = dateRangeQuerySchema.merge(paginationQuery
   search: z.string().trim().min(1).optional(),
 });
 export type ListReportsQuery = z.infer<typeof listReportsQuerySchema>;
+
+export const customerSortBy = z.enum(['orderCount', 'totalSpent', 'traeloContribution']);
+
+export const topCustomersQuerySchema = dateRangeQuerySchema.extend({
+  limit: z.coerce.number().int().positive().max(50).default(20),
+  sortBy: customerSortBy.default('orderCount'),
+});
+export type TopCustomersQuery = z.infer<typeof topCustomersQuerySchema>;

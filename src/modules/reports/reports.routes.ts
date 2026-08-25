@@ -5,7 +5,12 @@ import { validate } from '../../middlewares/validate';
 import { idParamSchema } from '../../shared/http';
 import { Role } from '../../generated/prisma/enums';
 import * as reportsController from './reports.controller';
-import { listReportsQuerySchema, reportsQuerySchema, topReportsQuerySchema } from './reports.dto';
+import {
+  listReportsQuerySchema,
+  reportsQuerySchema,
+  topCustomersQuerySchema,
+  topReportsQuerySchema,
+} from './reports.dto';
 
 export const reportsRouter = Router();
 
@@ -51,6 +56,12 @@ reportsRouter.get(
   '/deliverers/:id',
   validate({ params: idParamSchema, query: reportsQuerySchema }),
   reportsController.getDelivererSalesDetail,
+);
+
+reportsRouter.get(
+  '/customers',
+  validate({ query: topCustomersQuerySchema }),
+  reportsController.getTopCustomers,
 );
 
 reportsRouter.get(

@@ -167,6 +167,26 @@ export function getDelivererSalesAggregate(delivererId: string, range: DateRange
   });
 }
 
+export function getCustomerOrderTotals(range: DateRange) {
+  return prisma.order.groupBy({
+    by: ['customerPhone'],
+    where: { status: 'COMPLETED', completedAt: { gte: range.from, lte: range.to } },
+    _count: { _all: true },
+    _sum: { total: true, platformFee: true, traeloDeliveryShare: true },
+  });
+}
+
+// El nombre del cliente puede variar levemente entre pedidos (typos, mayúsculas); se usa el de
+// su pedido más reciente en vez de intentar "normalizar" un nombre canónico.
+export function findLatestCustomerNames(customerPhones: string[]) {
+  return prisma.order.findMany({
+    where: { customerPhone: { in: customerPhones } },
+    distinct: ['customerPhone'],
+    orderBy: { orderDate: 'desc' },
+    select: { customerPhone: true, customerName: true },
+  });
+}
+
 // Sin agregación de Prisma: `delivererId` vive en Order, no en OrderItem, así que no se puede
 // agrupar por mensajero + producto en una sola query de groupBy. Se trae cada pedido completado
 // de este negocio en el rango (con sus items) y se suma por (mensajero, producto) en JS — el
