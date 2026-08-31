@@ -7,6 +7,9 @@ import type { TopBusinessDTO, TopDelivererDTO } from '../reports/reports.service
 export interface DashboardSummaryDTO {
   totalOrders: number;
   completedOrders: number;
+  // % de totalOrders que llegó a COMPLETED — no confundir con "activos"/"cancelados": un pedido
+  // aún PENDING/ASSIGNED no cuenta como completado ni como fallido, simplemente no suma todavía.
+  completionRate: number;
   // Ventas PROCESADAS PARA LOS NEGOCIOS — nunca "ventas de Tráelo".
   businessSalesGross: number;
   platformFeeRevenue: number;
@@ -21,6 +24,10 @@ export interface DashboardSummaryDTO {
   topDeliverer: TopDelivererDTO | null;
 }
 
+function computeCompletionRate(totalOrders: number, completedOrders: number): number {
+  return totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
+}
+
 export async function getDashboardSummary(query: DateRangeQuery): Promise<DashboardSummaryDTO> {
   const [sales, topBusinesses, topDeliverers, businessCount, delivererCount] = await Promise.all([
     reportsService.getSalesReport(query),
@@ -33,6 +40,7 @@ export async function getDashboardSummary(query: DateRangeQuery): Promise<Dashbo
   return {
     totalOrders: sales.totalOrders,
     completedOrders: sales.completedOrders,
+    completionRate: computeCompletionRate(sales.totalOrders, sales.completedOrders),
     businessSalesGross: sales.businessSalesGross,
     platformFeeRevenue: sales.platformFeeRevenue,
     deliveryFeeGross: sales.deliveryFeeGross,
@@ -54,6 +62,7 @@ export async function getDashboardSummary(query: DateRangeQuery): Promise<Dashbo
 export interface DelivererDashboardSummaryDTO {
   totalOrders: number;
   completedOrders: number;
+  completionRate: number;
   averageTicket: number;
   topBusiness: TopBusinessDTO | null;
   topDeliverer: TopDelivererDTO | null;
@@ -71,6 +80,7 @@ export async function getDelivererDashboardSummary(
   return {
     totalOrders: sales.totalOrders,
     completedOrders: sales.completedOrders,
+    completionRate: computeCompletionRate(sales.totalOrders, sales.completedOrders),
     averageTicket: sales.averageTicket,
     topBusiness: topBusinesses[0] ?? null,
     topDeliverer: topDeliverers[0] ?? null,
