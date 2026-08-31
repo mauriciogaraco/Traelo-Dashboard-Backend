@@ -11,6 +11,7 @@ import { deliverersRouter } from './modules/deliverers/deliverers.routes';
 import { ordersRouter } from './modules/orders/orders.routes';
 import { settlementsRouter } from './modules/settlements/settlements.routes';
 import { reportsRouter } from './modules/reports/reports.routes';
+import { analyticsRouter } from './modules/analytics/analytics.routes';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { systemConfigRouter } from './config/system-config.routes';
 
@@ -33,6 +34,7 @@ export function createApp(): Express {
   app.use('/api/v1/orders', ordersRouter);
   app.use('/api/v1/settlements', settlementsRouter);
   app.use('/api/v1/reports', reportsRouter);
+  app.use('/api/v1/analytics', analyticsRouter);
   app.use('/api/v1/dashboard', dashboardRouter);
   app.use('/api/v1/config', systemConfigRouter);
 
