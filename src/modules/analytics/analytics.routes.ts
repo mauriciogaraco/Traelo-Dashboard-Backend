@@ -4,7 +4,12 @@ import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { Role } from '../../generated/prisma/enums';
 import * as analyticsController from './analytics.controller';
-import { analyticsQuerySchema, productsByHourQuerySchema } from './analytics.dto';
+import {
+  analyticsQuerySchema,
+  productsByHourQuerySchema,
+  customerTrendQuerySchema,
+  retentionCohortsQuerySchema,
+} from './analytics.dto';
 
 export const analyticsRouter = Router();
 
@@ -26,4 +31,16 @@ analyticsRouter.get(
   '/products-by-hour',
   validate({ query: productsByHourQuerySchema }),
   analyticsController.getProductsByHour,
+);
+
+analyticsRouter.get(
+  '/customer-trend',
+  validate({ query: customerTrendQuerySchema }),
+  analyticsController.getCustomerTrend,
+);
+
+analyticsRouter.get(
+  '/retention-cohorts',
+  validate({ query: retentionCohortsQuerySchema }),
+  analyticsController.getRetentionCohorts,
 );

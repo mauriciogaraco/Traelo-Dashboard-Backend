@@ -28,6 +28,25 @@ export function getOrdersForDemandByHour(range: DateRange) {
   });
 }
 
+// Trae cada pedido completado del rango con su cliente y fecha — se agrupa por día
+// calendario (hora de La Habana) en el service, mismo estilo que getOrdersForDemandByHour.
+export function getCompletedOrdersForTrend(range: DateRange) {
+  return prisma.order.findMany({
+    where: { status: 'COMPLETED', completedAt: { gte: range.from, lte: range.to } },
+    select: { customerPhone: true, completedAt: true, total: true },
+  });
+}
+
+// Todo el historial de pedidos completados, sin filtro de rango — una cohorte de
+// adquisición necesita saber en qué meses posteriores volvió cada cliente, sin importar
+// qué rango esté seleccionado en la página.
+export function getAllCompletedOrdersForCohorts() {
+  return prisma.order.findMany({
+    where: { status: 'COMPLETED' },
+    select: { customerPhone: true, completedAt: true },
+  });
+}
+
 // La hora del día no es una columna — se trae cada línea vendida en el rango (con la fecha del
 // pedido) y se filtra/agrupa por hora en el service, mismo estilo que
 // reports.repository.ts#getOrderItemsForTopProducts.
