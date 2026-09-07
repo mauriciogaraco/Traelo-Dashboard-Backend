@@ -20,5 +20,6 @@ export const customerSortBy = z.enum(['orderCount', 'totalSpent', 'traeloContrib
 export const topCustomersQuerySchema = dateRangeQuerySchema.extend({
   limit: z.coerce.number().int().positive().max(50).default(20),
   sortBy: customerSortBy.default('orderCount'),
+  businessId: z.cuid().optional(),
 });
 export type TopCustomersQuery = z.infer<typeof topCustomersQuerySchema>;

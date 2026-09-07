@@ -281,7 +281,10 @@ const MIN_ORDERS_TO_BE_RECURRING = 2;
 
 export async function getTopCustomers(query: TopCustomersQuery): Promise<CustomerReportDTO[]> {
   const range = resolveDateRange(query);
-  const grouped = await reportsRepository.getCustomerOrderTotals(range);
+  // Cuando se filtra por negocio, orderCount/totalSpent/etc. siguen siendo del PEDIDO completo
+  // (no solo la parte de ese negocio) — igual que el resto del reporte, solo se restringe a los
+  // pedidos que incluyen a ese negocio, sin partir montos de pedidos multi-negocio.
+  const grouped = await reportsRepository.getCustomerOrderTotals(range, query.businessId);
   if (grouped.length === 0) {
     return [];
   }

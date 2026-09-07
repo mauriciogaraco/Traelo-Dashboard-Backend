@@ -183,10 +183,14 @@ export function getOrderItemsForTopProducts(range: DateRange) {
   });
 }
 
-export function getCustomerOrderTotals(range: DateRange) {
+export function getCustomerOrderTotals(range: DateRange, businessId?: string) {
   return prisma.order.groupBy({
     by: ['customerPhone'],
-    where: { status: 'COMPLETED', completedAt: { gte: range.from, lte: range.to } },
+    where: {
+      status: 'COMPLETED',
+      completedAt: { gte: range.from, lte: range.to },
+      ...(businessId ? { businesses: { some: { businessId } } } : {}),
+    },
     _count: { _all: true },
     _sum: { total: true, platformFee: true, traeloDeliveryShare: true },
   });
