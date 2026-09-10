@@ -5,6 +5,7 @@ import type {
   AnalyticsQuery,
   ProductsByHourQuery,
   CustomerTrendQuery,
+  OrdersTrendQuery,
   RetentionCohortsQuery,
 } from './analytics.dto';
 
@@ -29,6 +30,12 @@ export async function getProductsByHour(req: Request, res: Response): Promise<vo
 export async function getCustomerTrend(req: Request, res: Response): Promise<void> {
   const query = req.query as unknown as CustomerTrendQuery;
   const data = await analyticsService.getCustomerTrend(query);
+  sendOk(res, data);
+}
+
+export async function getOrdersTrend(req: Request, res: Response): Promise<void> {
+  const query = req.query as unknown as OrdersTrendQuery;
+  const data = await analyticsService.getOrdersTrend(query);
   sendOk(res, data);
 }
 

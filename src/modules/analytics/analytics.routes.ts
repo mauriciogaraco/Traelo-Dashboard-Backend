@@ -8,6 +8,7 @@ import {
   analyticsQuerySchema,
   productsByHourQuerySchema,
   customerTrendQuerySchema,
+  ordersTrendQuerySchema,
   retentionCohortsQuerySchema,
 } from './analytics.dto';
 
@@ -37,6 +38,12 @@ analyticsRouter.get(
   '/customer-trend',
   validate({ query: customerTrendQuerySchema }),
   analyticsController.getCustomerTrend,
+);
+
+analyticsRouter.get(
+  '/orders-trend',
+  validate({ query: ordersTrendQuerySchema }),
+  analyticsController.getOrdersTrend,
 );
 
 analyticsRouter.get(

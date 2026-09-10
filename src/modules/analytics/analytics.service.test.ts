@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Prisma } from '../../generated/prisma/client';
 import { startOfBusinessDay, endOfBusinessDay } from '../../shared/date-range';
-import { computeCustomerTrend, computeRetentionCohorts } from './analytics.service';
+import {
+  computeCustomerTrend,
+  computeOrdersTrend,
+  computeRetentionCohorts,
+  pointsFromMonthlyAggregate,
+} from './analytics.service';
 
 // Datos sintéticos, no contra la base de datos compartida (que tiene tráfico real todo el
 // tiempo y haría que cualquier conteo exacto fuera poco confiable como assertion de test).
@@ -54,6 +59,72 @@ describe('computeCustomerTrend', () => {
       recurringCustomers: 0,
       retentionRate: 0,
     });
+  });
+});
+
+describe('computeOrdersTrend', () => {
+  it('bucketiza por día y rellena con ceros los días sin pedidos', () => {
+    const aug1 = new Date('2026-08-01T15:00:00Z');
+    const aug3 = new Date('2026-08-03T15:00:00Z');
+    const range = { from: startOfBusinessDay(aug1), to: endOfBusinessDay(aug3) };
+    const orders = [
+      { orderDate: aug1, total: new Prisma.Decimal(1000) },
+      { orderDate: aug1, total: new Prisma.Decimal(500) },
+      { orderDate: aug3, total: new Prisma.Decimal(300) },
+    ];
+
+    const points = computeOrdersTrend(orders, range, 'day');
+
+    expect(points).toEqual([
+      { label: '2026-08-01', orderCount: 2, businessSalesGross: 1500 },
+      { label: '2026-08-02', orderCount: 0, businessSalesGross: 0 },
+      { label: '2026-08-03', orderCount: 1, businessSalesGross: 300 },
+    ]);
+  });
+
+  it('bucketiza por semana ISO usando el lunes de cada semana como clave', () => {
+    // 2026-08-03 es lunes: semana 1 = 03-09, semana 2 = 10-16.
+    const midWeek1 = new Date('2026-08-05T15:00:00Z');
+    const midWeek2 = new Date('2026-08-12T15:00:00Z');
+    const range = {
+      from: startOfBusinessDay(new Date('2026-08-03T12:00:00Z')),
+      to: endOfBusinessDay(new Date('2026-08-16T12:00:00Z')),
+    };
+    const orders = [
+      { orderDate: midWeek1, total: new Prisma.Decimal(200) },
+      { orderDate: midWeek2, total: new Prisma.Decimal(400) },
+      { orderDate: midWeek2, total: new Prisma.Decimal(100) },
+    ];
+
+    const points = computeOrdersTrend(orders, range, 'week');
+
+    expect(points).toEqual([
+      { label: '2026-08-03', orderCount: 1, businessSalesGross: 200 },
+      { label: '2026-08-10', orderCount: 2, businessSalesGross: 500 },
+    ]);
+  });
+});
+
+describe('pointsFromMonthlyAggregate', () => {
+  it('rellena los meses sin pedidos a partir de filas ya agregadas en la base de datos', () => {
+    // Semestre/Año agregan en Postgres (ver getOrdersTrendMonthlyAggregate) en vez de traer
+    // cada pedido crudo — esta función solo hace el zero-fill sobre esas filas ya sumadas.
+    const range = {
+      from: startOfBusinessDay(new Date('2026-08-01T12:00:00Z')),
+      to: endOfBusinessDay(new Date('2026-10-15T12:00:00Z')),
+    };
+    const rows = [
+      { month: '2026-08', order_count: 1, sales_gross: 1000 },
+      { month: '2026-10', order_count: 1, sales_gross: 2000 },
+    ];
+
+    const points = pointsFromMonthlyAggregate(rows, range);
+
+    expect(points).toEqual([
+      { label: '2026-08', orderCount: 1, businessSalesGross: 1000 },
+      { label: '2026-09', orderCount: 0, businessSalesGross: 0 },
+      { label: '2026-10', orderCount: 1, businessSalesGross: 2000 },
+    ]);
   });
 });
 

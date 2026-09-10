@@ -28,6 +28,37 @@ export function getOrdersForDemandByHour(range: DateRange) {
   });
 }
 
+export interface OrdersTrendMonthlyRow {
+  month: string;
+  order_count: number;
+  sales_gross: number;
+}
+
+// Para Semestre/Año (granularidad mensual) traer cada pedido crudo con findMany y sumar en JS
+// no escala — un año son decenas de miles de filas y termina en timeout de Prisma/Postgres
+// (P2039) antes de que Node llegue a agrupar nada. Se agrega directamente en Postgres, que
+// devuelve ~6-12 filas ya sumadas.
+//
+// "orderDate" es TIMESTAMP(3) sin huso horario, guardado como el instante UTC "pelado" (así
+// escribe Prisma cualquier Date de JS) — por eso hace falta el doble AT TIME ZONE: la primera
+// conversión (a 'UTC') lo reinterpreta como el timestamptz real, la segunda (a
+// 'America/Havana') lo pasa a la hora de pared de La Habana para truncar el mes ahí, no en UTC.
+export function getOrdersTrendMonthlyAggregate(range: DateRange): Promise<OrdersTrendMonthlyRow[]> {
+  return prisma.$queryRaw<OrdersTrendMonthlyRow[]>`
+    SELECT
+      to_char(
+        date_trunc('month', "orderDate" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Havana'),
+        'YYYY-MM'
+      ) AS month,
+      COUNT(*)::int AS order_count,
+      COALESCE(SUM("total"), 0)::float8 AS sales_gross
+    FROM "orders"
+    WHERE "orderDate" >= ${range.from} AND "orderDate" <= ${range.to} AND status != 'CANCELLED'
+    GROUP BY 1
+    ORDER BY 1
+  `;
+}
+
 // Trae cada pedido completado del rango con su cliente y fecha — se agrupa por día
 // calendario (hora de La Habana) en el service, mismo estilo que getOrdersForDemandByHour.
 export function getCompletedOrdersForTrend(range: DateRange) {

@@ -13,6 +13,12 @@ export type ProductsByHourQuery = z.infer<typeof productsByHourQuerySchema>;
 export const customerTrendQuerySchema = dateRangeQuerySchema;
 export type CustomerTrendQuery = z.infer<typeof customerTrendQuerySchema>;
 
+// La granularidad (día/semana/mes) no es un parámetro que mande el cliente — se deriva de
+// `range` en el service, para que el frontend solo tenga que pedir el mismo `range` que ya
+// usa en las pestañas, igual que el resto de los endpoints de analytics.
+export const ordersTrendQuerySchema = dateRangeQuerySchema;
+export type OrdersTrendQuery = z.infer<typeof ordersTrendQuerySchema>;
+
 // Independiente de los tabs de rango de la página: una cohorte necesita meses de historia,
 // no tiene sentido acotarla a "Hoy"/"Semana".
 export const retentionCohortsQuerySchema = z.object({

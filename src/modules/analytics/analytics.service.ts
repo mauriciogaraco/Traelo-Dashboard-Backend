@@ -1,12 +1,17 @@
 import type { Prisma } from '../../generated/prisma/client';
 import { decimalToNumber } from '../../shared/prisma';
-import { resolveDateRange, startOfBusinessDay } from '../../shared/date-range';
-import type { DateRange } from '../../shared/date-range';
+import {
+  resolveDateRange,
+  startOfBusinessDay,
+  startOfBusinessIsoWeek,
+} from '../../shared/date-range';
+import type { DateRange, DateRangeQuery } from '../../shared/date-range';
 import * as analyticsRepository from './analytics.repository';
 import type {
   AnalyticsQuery,
   ProductsByHourQuery,
   CustomerTrendQuery,
+  OrdersTrendQuery,
   RetentionCohortsQuery,
 } from './analytics.dto';
 
@@ -286,6 +291,126 @@ export function computeCustomerTrend(
     const next = new Date(cursor);
     next.setUTCDate(next.getUTCDate() + 1);
     cursor = startOfBusinessDay(next);
+  }
+  return points;
+}
+
+export type OrdersTrendGranularity = 'day' | 'week' | 'month';
+
+// La granularidad depende del rango elegido en las pestañas — no tiene sentido mostrar 365
+// puntos diarios para "Año" (comportamiento de meses) ni un solo punto mensual para "Semana"
+// (comportamiento de los días). "Hoy"/"custom" caen en día por default (demand-by-hour ya
+// cubre el detalle horario de "Hoy").
+function granularityForRange(range: DateRangeQuery['range']): OrdersTrendGranularity {
+  switch (range) {
+    case 'month':
+      return 'week';
+    case '6months':
+    case 'year':
+      return 'month';
+    default:
+      return 'day';
+  }
+}
+
+export interface OrdersTrendPointDTO {
+  // Clave del bucket: "2026-09-08" (día o lunes de esa semana ISO) o "2026-09" (mes) —
+  // el frontend la interpreta según `granularity`.
+  label: string;
+  orderCount: number;
+  businessSalesGross: number;
+}
+
+export interface OrdersTrendDTO {
+  granularity: OrdersTrendGranularity;
+  points: OrdersTrendPointDTO[];
+}
+
+export async function getOrdersTrend(query: OrdersTrendQuery): Promise<OrdersTrendDTO> {
+  const range = resolveDateRange(query);
+  const granularity = granularityForRange(query.range);
+
+  // "month" cubre Semestre/Año: traer cada pedido crudo y sumar en JS no escala ahí (decenas de
+  // miles de filas, terminaba en timeout de Prisma/Postgres — P2039) así que ese caso agrega en
+  // la base de datos y solo trae ~6-12 filas ya sumadas. "day"/"week" cubren Semana/Mes, con un
+  // volumen de filas chico — ahí sigue siendo más simple traer las filas y bucketizar en JS.
+  if (granularity === 'month') {
+    const rows = await analyticsRepository.getOrdersTrendMonthlyAggregate(range);
+    return { granularity, points: pointsFromMonthlyAggregate(rows, range) };
+  }
+
+  const orders = await analyticsRepository.getOrdersForDemandByHour(range);
+  return { granularity, points: computeOrdersTrend(orders, range, granularity) };
+}
+
+export interface OrdersTrendOrder {
+  orderDate: Date;
+  total: Prisma.Decimal;
+}
+
+// Lógica pura — mismo motivo que computeCustomerTrend: testeable con datos sintéticas.
+export function computeOrdersTrend(
+  orders: OrdersTrendOrder[],
+  range: DateRange,
+  granularity: 'day' | 'week',
+): OrdersTrendPointDTO[] {
+  function bucketKey(date: Date): string {
+    return granularity === 'week'
+      ? startOfBusinessIsoWeek(date).toISOString().slice(0, 10)
+      : startOfBusinessDay(date).toISOString().slice(0, 10);
+  }
+
+  const buckets = new Map<string, { orderCount: number; businessSalesGross: number }>();
+  for (const order of orders) {
+    const key = bucketKey(order.orderDate);
+    const bucket = buckets.get(key) ?? { orderCount: 0, businessSalesGross: 0 };
+    bucket.orderCount += 1;
+    bucket.businessSalesGross += decimalToNumber(order.total) ?? 0;
+    buckets.set(key, bucket);
+  }
+
+  // Zero-fill de cada bucket del rango, no solo los que tuvieron pedidos — mismo criterio que
+  // getDemandByHour/computeCustomerTrend, para que el gráfico no tenga huecos.
+  const stepDays = granularity === 'week' ? 7 : 1;
+  const bucketStart = (date: Date) =>
+    granularity === 'week' ? startOfBusinessIsoWeek(date) : startOfBusinessDay(date);
+  const endKey = bucketStart(range.to).getTime();
+  const points: OrdersTrendPointDTO[] = [];
+  let cursor = bucketStart(range.from);
+  while (cursor.getTime() <= endKey) {
+    const key = cursor.toISOString().slice(0, 10);
+    const bucket = buckets.get(key);
+    points.push({
+      label: key,
+      orderCount: bucket?.orderCount ?? 0,
+      businessSalesGross: bucket?.businessSalesGross ?? 0,
+    });
+    const next = new Date(cursor);
+    next.setUTCDate(next.getUTCDate() + stepDays);
+    cursor = bucketStart(next);
+  }
+  return points;
+}
+
+// Lógica pura — separada de getOrdersTrend para poder testearla con filas sintéticas, igual
+// que computeOrdersTrend/computeCustomerTrend.
+export function pointsFromMonthlyAggregate(
+  rows: analyticsRepository.OrdersTrendMonthlyRow[],
+  range: DateRange,
+): OrdersTrendPointDTO[] {
+  const buckets = new Map(rows.map((row) => [row.month, row]));
+  const startKey = getMonthKey(range.from);
+  const endKey = getMonthKey(range.to);
+  const span = monthDiff(startKey, endKey);
+  const points: OrdersTrendPointDTO[] = [];
+  for (let i = 0; i <= span; i += 1) {
+    const key = addMonths(startKey, i);
+    const bucket = buckets.get(key);
+    points.push({
+      label: key,
+      orderCount: bucket?.order_count ?? 0,
+      businessSalesGross: bucket?.sales_gross ?? 0,
+    });
   }
   return points;
 }
