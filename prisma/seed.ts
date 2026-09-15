@@ -16,6 +16,15 @@ async function main() {
     },
   });
 
+  await prisma.catalogState.upsert({
+    where: { id: 'singleton' },
+    update: {},
+    create: {
+      id: 'singleton',
+      version: 1,
+    },
+  });
+
   const ownerEmail = process.env.SEED_OWNER_EMAIL;
   const ownerPassword = process.env.SEED_OWNER_PASSWORD;
 
@@ -36,7 +45,7 @@ async function main() {
     },
   });
 
-  console.log('Seed completado: SystemConfig y usuario OWNER listos.');
+  console.log('Seed completado: SystemConfig, CatalogState y usuario OWNER listos.');
 }
 
 main()
