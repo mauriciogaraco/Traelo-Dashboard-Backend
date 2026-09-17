@@ -1,10 +1,12 @@
 import type { Request, Response } from 'express';
 import { sendCreated, sendNoContent, sendOk, sendPaginated } from '../../shared/http';
+import { BadRequestError } from '../../shared/errors';
 import * as productsService from './products.service';
 import type {
   CreateProductInput,
   ListProductsQuery,
   ProductParams,
+  SetProductAvailabilityInput,
   SetProductCommissionInput,
   UpdateProductInput,
 } from './products.dto';
@@ -41,6 +43,25 @@ export async function updateProduct(req: Request, res: Response): Promise<void> 
 export async function deactivateProduct(req: Request, res: Response): Promise<void> {
   const { id: businessId, productId } = req.params as unknown as ProductParams;
   const product = await productsService.deactivateProduct(businessId, productId);
+  sendOk(res, product);
+}
+
+export async function setAvailability(req: Request, res: Response): Promise<void> {
+  const { id: businessId, productId } = req.params as unknown as ProductParams;
+  const product = await productsService.setProductAvailability(
+    businessId,
+    productId,
+    req.body as SetProductAvailabilityInput,
+  );
+  sendOk(res, product);
+}
+
+export async function setImage(req: Request, res: Response): Promise<void> {
+  const { id: businessId, productId } = req.params as unknown as ProductParams;
+  if (!req.file) {
+    throw new BadRequestError('Falta el archivo de imagen (campo "image")', 'MISSING_FILE');
+  }
+  const product = await productsService.setProductImage(businessId, productId, req.file.buffer);
   sendOk(res, product);
 }
 

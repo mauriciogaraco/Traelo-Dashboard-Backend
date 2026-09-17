@@ -2,13 +2,16 @@ import { NotFoundError, BadRequestError, ConflictError, ForbiddenError } from '.
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
 import { resolveDateRange } from '../../shared/date-range';
+import { sendTelegramMessage } from '../../shared/telegram';
 import { Prisma } from '../../generated/prisma/client';
-import type { CommissionType, OrderStatus } from '../../generated/prisma/enums';
+import type { CommissionType, OrderSource, OrderStatus } from '../../generated/prisma/enums';
 import * as businessesRepository from '../businesses/businesses.repository';
 import * as productsRepository from '../businesses/products.repository';
 import * as deliverersRepository from '../deliverers/deliverers.repository';
 import * as commissionCalculator from '../businesses/commission-calculator';
 import * as systemConfigService from '../../config/system-config.service';
+import * as customersService from '../customers/customers.service';
+import * as customersRepository from '../customers/customers.repository';
 import * as ordersRepository from './orders.repository';
 import type { OrderWithRelations } from './orders.repository';
 import * as calc from './orders.calculations';
@@ -56,8 +59,11 @@ export interface OrderDTO {
   cancelledAt: Date | null;
   delivererId: string | null;
   delivererName: string | null;
-  registeredByUserId: string;
-  registeredByName: string;
+  registeredByUserId: string | null;
+  registeredByName: string | null;
+  customerId: string | null;
+  source: OrderSource;
+  raffleNumber: number | null;
   productsTotal: number; // subtotal de productos — 100% del negocio
   platformFee: number; // "Servicio Tráelo": cargo visible, redondeado, ganancia de Tráelo
   total: number; // productsTotal + deliveryFee + platformFee
@@ -86,7 +92,10 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     delivererId: order.delivererId,
     delivererName: order.deliverer?.user.name ?? null,
     registeredByUserId: order.registeredByUserId,
-    registeredByName: order.registeredBy.name,
+    registeredByName: order.registeredBy?.name ?? null,
+    customerId: order.customerId,
+    source: order.source,
+    raffleNumber: order.raffleNumber,
     productsTotal: decimalToNumber(order.productsTotal),
     platformFee: decimalToNumber(order.platformFee),
     total: decimalToNumber(order.total),
@@ -115,6 +124,58 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
+}
+
+// Fase 14: mensaje operacional para el grupo/canal de Telegram. Solo texto — nunca es la
+// fuente de verdad del pedido, que ya vive en Postgres antes de que esto se arme.
+function formatOrderNotification(order: OrderDTO): string {
+  const businessNames = order.businesses.map((b) => b.businessName).join(', ') || '—';
+  const lines = [
+    `🆕 <b>Pedido #${order.orderNumber}</b> (${order.source})`,
+    `Cliente: ${order.customerName} — ${order.customerPhone}`,
+    `Dirección: ${order.customerAddress}${order.addressReference ? ` (${order.addressReference})` : ''}`,
+    `Negocio(s): ${businessNames}`,
+    `Total: $${order.total.toFixed(2)} CUP`,
+  ];
+  return lines.join('\n');
+}
+
+// Fase 14, pedido explícito del negocio: evita que un cliente reenvíe pedidos en bucle
+// mientras espera respuesta (ha pasado que reenvían y reenvían por no ver confirmación). Solo
+// aplica a pedidos de la app (source=APP) — el flujo manual del dashboard nunca lo dispara.
+// Se libera solo: cuando pasan REORDER_COOLDOWN_MINUTES, o cuando el staff ya atendió el
+// pedido anterior (cambió de PENDING a cualquier otro estado).
+const REORDER_COOLDOWN_MINUTES = 20;
+
+export async function assertNoRecentPendingAppOrder(
+  customerPhone: string,
+  now: Date,
+): Promise<void> {
+  const cooldownStart = new Date(now.getTime() - REORDER_COOLDOWN_MINUTES * 60_000);
+  const recentPending = await ordersRepository.findRecentPendingAppOrderByPhone(
+    customerPhone,
+    cooldownStart,
+  );
+  if (!recentPending) {
+    return;
+  }
+
+  const retryAfterMs =
+    recentPending.orderDate.getTime() + REORDER_COOLDOWN_MINUTES * 60_000 - now.getTime();
+  const retryAfterMinutes = Math.max(1, Math.ceil(retryAfterMs / 60_000));
+
+  throw new ConflictError(
+    `Ya tenés un pedido reciente (#${recentPending.orderNumber}) esperando respuesta. Probá de nuevo en ${retryAfterMinutes} minuto(s).`,
+    'RECENT_ORDER_PENDING',
+    { orderNumber: recentPending.orderNumber, retryAfterMinutes },
+  );
+}
+
+// Para que createAppOrder/createCheckoutOrder puedan devolver el mismo pedido en una
+// reproducción idempotente sin duplicar el mapeo a DTO (toDTO es privado a este archivo).
+export async function getOrderByClientRequestId(clientRequestId: string): Promise<OrderDTO | null> {
+  const order = await ordersRepository.findByClientRequestId(clientRequestId);
+  return order ? toDTO(order) : null;
 }
 
 async function resolveEffectivePercentage(deliverer: {
@@ -220,11 +281,25 @@ function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
 
 export async function createOrder(
   input: CreateOrderInput,
-  registeredByUserId: string,
+  registeredByUserId?: string,
 ): Promise<OrderDTO> {
+  // Idempotencia (Fase 13): si ya existe un pedido con este clientRequestId, la request es un
+  // reintento (mala conexión, timeout, doble tap) — se devuelve el pedido ya creado en vez de
+  // duplicarlo. No revalida ni recalcula nada: el primer intento ya es la fuente de verdad.
+  if (input.clientRequestId) {
+    const existing = await ordersRepository.findByClientRequestId(input.clientRequestId);
+    if (existing) {
+      return toDTO(existing);
+    }
+  }
+
   const businessIds = input.businesses.map((group) => group.businessId);
   if (new Set(businessIds).size !== businessIds.length) {
     throw new BadRequestError('No se puede repetir el mismo negocio en un pedido');
+  }
+
+  if (input.customerId) {
+    await customersService.assertCustomerExists(input.customerId);
   }
 
   const preparedGroups = await prepareBusinessGroups(input.businesses);
@@ -252,32 +327,70 @@ export async function createOrder(
       : computedPlatformFee;
   const total = productsTotal.plus(deliveryFee).plus(platformFee);
 
-  const order = await ordersRepository.create({
-    customerName: input.customerName,
-    customerAddress: input.customerAddress,
-    addressReference: input.addressReference,
-    customerPhone: input.customerPhone,
-    deliveryFee,
-    status: 'PENDING',
-    productsTotal,
-    platformFee,
-    total,
-    // Todavía no hay mensajero asignado: la ganancia de Tráelo por ahora es solo el Servicio Tráelo.
-    traeloEarning: platformFee,
-    traeloDeliveryShare: new Prisma.Decimal(0),
-    delivererEarning: new Prisma.Decimal(0),
-    registeredBy: { connect: { id: registeredByUserId } },
-    businesses: {
-      create: toBusinessesCreateInput(preparedGroups),
-    },
-  });
+  let order: OrderWithRelations;
+  try {
+    order = await ordersRepository.create({
+      customerName: input.customerName,
+      customerAddress: input.customerAddress,
+      addressReference: input.addressReference,
+      customerPhone: input.customerPhone,
+      deliveryFee,
+      status: 'PENDING',
+      productsTotal,
+      platformFee,
+      total,
+      // Todavía no hay mensajero asignado: la ganancia de Tráelo por ahora es solo el Servicio Tráelo.
+      traeloEarning: platformFee,
+      traeloDeliveryShare: new Prisma.Decimal(0),
+      delivererEarning: new Prisma.Decimal(0),
+      source: input.source ?? 'MANUAL',
+      clientRequestId: input.clientRequestId,
+      raffleNumber: input.raffleNumber,
+      ...(registeredByUserId ? { registeredBy: { connect: { id: registeredByUserId } } } : {}),
+      ...(input.customerId ? { customer: { connect: { id: input.customerId } } } : {}),
+      businesses: {
+        create: toBusinessesCreateInput(preparedGroups),
+      },
+    });
+  } catch (error) {
+    // Carrera: dos requests con el mismo clientRequestId llegaron casi al mismo tiempo y
+    // ambas pasaron el chequeo de arriba antes de que la primera terminara de escribir. El
+    // unique constraint en DB es la garantía real contra el duplicado — acá solo convertimos
+    // ese rechazo en "devolver el pedido que ganó" en vez de un error genérico.
+    if (
+      input.clientRequestId &&
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      const existing = await ordersRepository.findByClientRequestId(input.clientRequestId);
+      if (existing) {
+        return toDTO(existing);
+      }
+    }
+    throw error;
+  }
 
-  return toDTO(order);
+  if (input.customerId) {
+    await customersRepository.touchLastOrderAt(input.customerId, order.orderDate);
+  }
+
+  const dto = toDTO(order);
+
+  // Fase 14: solo pedidos que NO entró el staff a mano — ellos ya saben que lo crearon, una
+  // notificación acá sería ruido. Nunca puede tumbar la creación del pedido (ver
+  // sendTelegramMessage) y no se dispara en los retornos tempranos de arriba (reproducción
+  // idempotente o carrera perdida), así que nunca se manda duplicada.
+  if (dto.source !== 'MANUAL') {
+    await sendTelegramMessage(formatOrderNotification(dto));
+  }
+
+  return dto;
 }
 
 export async function listOrders(
   query: ListOrdersQuery,
   scopeDelivererId?: string,
+  scopeCustomerId?: string,
 ): Promise<{ data: OrderDTO[]; meta: PaginationMeta }> {
   // "range" es el atajo (hoy/semana/mes/...); from/to solo sin range es un rango libre. Si no
   // viene nada de esto, no se filtra por fecha ("todos").
@@ -294,6 +407,7 @@ export async function listOrders(
     ...(query.search ? { customerName: { contains: query.search, mode: 'insensitive' } } : {}),
     ...(dateRange ? { orderDate: { gte: dateRange.from, lte: dateRange.to } } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
+    ...(scopeCustomerId ? { customerId: scopeCustomerId } : {}),
   };
 
   const { skip, take } = toSkipTake(query);
@@ -305,12 +419,20 @@ export async function listOrders(
   return { data: orders.map(toDTO), meta: buildPaginationMeta(query, total) };
 }
 
-export async function getOrderById(id: string, scopeDelivererId?: string): Promise<OrderDTO> {
+export async function getOrderById(
+  id: string,
+  scopeDelivererId?: string,
+  scopeCustomerId?: string,
+): Promise<OrderDTO> {
   const order = await ordersRepository.findById(id);
   if (!order) {
-    throw new NotFoundError('Pedido no encontrado');
+    throw new NotFoundError('Pedido no encontrado', 'ORDER_NOT_FOUND');
   }
   if (scopeDelivererId && order.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
+  }
+  // Fase 15: un cliente no debe poder consultar un pedido de otro cliente.
+  if (scopeCustomerId && order.customerId !== scopeCustomerId) {
     throw new ForbiddenError();
   }
   return toDTO(order);
@@ -348,6 +470,7 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
     customerAddress: input.customerAddress,
     addressReference: input.addressReference,
     customerPhone: input.customerPhone,
+    raffleNumber: input.raffleNumber,
   };
 
   const itemsChanged = input.businesses !== undefined;

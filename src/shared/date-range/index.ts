@@ -114,31 +114,82 @@ export function endOfBusinessIsoWeek(date: Date): Date {
   return endOfBusinessDay(shifted);
 }
 
+/**
+ * Hora:minuto local de `date` en La Habana, representada como Date anclado a 1970-01-01 UTC
+ * — mismo formato que BusinessHours.openTime/closeTime (ver shared/time), así se puede
+ * comparar directamente con `.getTime()` sin conversiones adicionales.
+ */
+export function getBusinessTimeOfDay(date: Date): Date {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const map: Partial<Record<string, string>> = {};
+  for (const part of parts) map[part.type] = part.value;
+  return new Date(Date.UTC(1970, 0, 1, Number(map.hour), Number(map.minute)));
+}
+
+/** Hora local (0-23) de `date` en La Habana, respetando horario de verano. */
+export function getBusinessHour(date: Date): number {
+  return getBusinessTimeOfDay(date).getUTCHours();
+}
+
+/**
+ * Día calendario de `date` en La Habana, como instante UTC a medianoche — mismo formato que
+ * usan las columnas @db.Date de Prisma (ej. BusinessClosure.date).
+ */
+export function getBusinessDateOnly(date: Date): Date {
+  const { year, month, day } = getZonedDateParts(date, BUSINESS_TIMEZONE);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** Día de la semana (0=domingo…6=sábado, convención JS Date#getDay()) de `date` en La Habana. */
+export function getBusinessDayOfWeek(date: Date): number {
+  return getBusinessDateOnly(date).getUTCDay();
+}
+
 export function resolveDateRange(query: DateRangeQuery): DateRange {
   const now = new Date();
 
   switch (query.range) {
     case 'today':
-      return { from: zonedStartOfDay(now, BUSINESS_TIMEZONE), to: zonedEndOfDay(now, BUSINESS_TIMEZONE) };
+      return {
+        from: zonedStartOfDay(now, BUSINESS_TIMEZONE),
+        to: zonedEndOfDay(now, BUSINESS_TIMEZONE),
+      };
     case 'week': {
       const from = new Date(now);
       from.setDate(from.getDate() - 7);
-      return { from: zonedStartOfDay(from, BUSINESS_TIMEZONE), to: zonedEndOfDay(now, BUSINESS_TIMEZONE) };
+      return {
+        from: zonedStartOfDay(from, BUSINESS_TIMEZONE),
+        to: zonedEndOfDay(now, BUSINESS_TIMEZONE),
+      };
     }
     case 'month': {
       const from = new Date(now);
       from.setMonth(from.getMonth() - 1);
-      return { from: zonedStartOfDay(from, BUSINESS_TIMEZONE), to: zonedEndOfDay(now, BUSINESS_TIMEZONE) };
+      return {
+        from: zonedStartOfDay(from, BUSINESS_TIMEZONE),
+        to: zonedEndOfDay(now, BUSINESS_TIMEZONE),
+      };
     }
     case '6months': {
       const from = new Date(now);
       from.setMonth(from.getMonth() - 6);
-      return { from: zonedStartOfDay(from, BUSINESS_TIMEZONE), to: zonedEndOfDay(now, BUSINESS_TIMEZONE) };
+      return {
+        from: zonedStartOfDay(from, BUSINESS_TIMEZONE),
+        to: zonedEndOfDay(now, BUSINESS_TIMEZONE),
+      };
     }
     case 'year': {
       const from = new Date(now);
       from.setFullYear(from.getFullYear() - 1);
-      return { from: zonedStartOfDay(from, BUSINESS_TIMEZONE), to: zonedEndOfDay(now, BUSINESS_TIMEZONE) };
+      return {
+        from: zonedStartOfDay(from, BUSINESS_TIMEZONE),
+        to: zonedEndOfDay(now, BUSINESS_TIMEZONE),
+      };
     }
     case 'custom': {
       if (!query.from || !query.to) {

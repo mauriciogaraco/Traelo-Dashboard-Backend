@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from '../../shared/http';
 import { dateRangePreset } from '../../shared/date-range';
-import { OrderStatus } from '../../generated/prisma/enums';
+import { OrderSource, OrderStatus } from '../../generated/prisma/enums';
 
 const orderItemInputSchema = z
   .object({
@@ -31,6 +31,18 @@ export const createOrderSchema = z.object({
   // DTO) — el cliente nunca puede spoofear el valor calculado, solo pedir una excepción
   // deliberada que el staff autorizado decide a mano.
   platformFeeOverride: z.coerce.number().min(0).optional(),
+  // Cliente de la app/web vinculado a este pedido (opcional: la mayoría de los pedidos
+  // siguen siendo manuales, sin Customer). source por defecto MANUAL en el service, no acá,
+  // para no obligar a este DTO a decidir el default de cada caller.
+  customerId: z.cuid('id de cliente inválido').optional(),
+  source: z.enum(OrderSource).optional(),
+  // Idempotencia (Fase 13): generado por el caller (la app), no por Prisma — por eso es un
+  // string libre, no z.cuid(). Si la misma request llega dos veces, la segunda devuelve el
+  // pedido ya creado en vez de duplicarlo. Opcional: el flujo manual del dashboard no lo usa.
+  clientRequestId: z.string().min(8).max(100).optional(),
+  // Número del "🎟️ Número del Sorteo" del vale pegado, cuando el pedido participa de una
+  // promoción vigente. Opcional: no todos los pedidos ni todas las épocas tienen sorteo activo.
+  raffleNumber: z.coerce.number().int().positive().optional(),
   businesses: z.array(orderBusinessInputSchema).min(1),
 });
 
@@ -43,6 +55,7 @@ export const updateOrderSchema = z.object({
   customerPhone: z.string().min(6).max(30).optional(),
   deliveryFee: z.coerce.number().min(0).optional(),
   platformFeeOverride: z.coerce.number().min(0).optional(),
+  raffleNumber: z.coerce.number().int().positive().nullable().optional(),
   // Reemplaza por completo los negocios/productos del pedido (agregar, quitar, cambiar
   // cantidad/precio/negocio). Si se omite, los productos existentes no se tocan.
   businesses: z.array(orderBusinessInputSchema).min(1).optional(),

@@ -1,6 +1,9 @@
 import { NotFoundError, BadRequestError } from '../../shared/errors';
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
+import { bumpCatalogVersion } from '../../shared/catalog';
+import { uploadImage } from '../../shared/cloudinary';
+import { CatalogEntityType, CatalogChangeType } from '../../generated/prisma/enums';
 import type { Prisma } from '../../generated/prisma/client';
 import type { CommissionType } from '../../generated/prisma/enums';
 import * as businessesRepository from './businesses.repository';
@@ -9,6 +12,7 @@ import type { SubscriptionDTO } from './subscriptions.service';
 import type {
   CreateBusinessInput,
   ListBusinessesQuery,
+  SetAcceptingOrdersInput,
   UpdateBusinessInput,
 } from './businesses.dto';
 
@@ -19,9 +23,12 @@ export interface BusinessDTO {
   address: string;
   joinedAt: Date;
   active: boolean;
+  acceptingOrders: boolean;
   commissionType: CommissionType;
   commissionPercentage: number | null;
   defaultProductCommissionAmount: number | null;
+  deliveryFeeBase: number;
+  logoUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -37,9 +44,12 @@ interface BusinessRecord {
   address: string;
   joinedAt: Date;
   active: boolean;
+  acceptingOrders: boolean;
   commissionType: CommissionType;
   commissionPercentage: Prisma.Decimal | null;
   defaultProductCommissionAmount: Prisma.Decimal | null;
+  deliveryFeeBase: Prisma.Decimal;
+  logoUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,9 +62,12 @@ function toDTO(business: BusinessRecord): BusinessDTO {
     address: business.address,
     joinedAt: business.joinedAt,
     active: business.active,
+    acceptingOrders: business.acceptingOrders,
     commissionType: business.commissionType,
     commissionPercentage: decimalToNumber(business.commissionPercentage),
     defaultProductCommissionAmount: decimalToNumber(business.defaultProductCommissionAmount),
+    deliveryFeeBase: decimalToNumber(business.deliveryFeeBase),
+    logoUrl: business.logoUrl,
     createdAt: business.createdAt,
     updatedAt: business.updatedAt,
   };
@@ -69,8 +82,11 @@ export async function createBusiness(input: CreateBusinessInput): Promise<Busine
     commissionType: input.commissionType,
     commissionPercentage: input.commissionPercentage,
     defaultProductCommissionAmount: input.defaultProductCommissionAmount,
+    ...(input.deliveryFeeBase !== undefined ? { deliveryFeeBase: input.deliveryFeeBase } : {}),
+    logoUrl: input.logoUrl,
   });
 
+  await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
   return toDTO(business);
 }
 
@@ -136,11 +152,35 @@ export async function updateBusiness(id: string, input: UpdateBusinessInput): Pr
   }
 
   const business = await businessesRepository.update(id, input);
+  await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
   return toDTO(business);
 }
 
 export async function deactivateBusiness(id: string): Promise<BusinessDTO> {
   await assertBusinessExists(id);
   const business = await businessesRepository.update(id, { active: false });
+  await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
+  return toDTO(business);
+}
+
+export async function setAcceptingOrders(
+  id: string,
+  input: SetAcceptingOrdersInput,
+): Promise<BusinessDTO> {
+  await assertBusinessExists(id);
+  const business = await businessesRepository.update(id, {
+    acceptingOrders: input.acceptingOrders,
+  });
+  await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
+  return toDTO(business);
+}
+
+// Fase 22: sube la imagen a Cloudinary (ver shared/cloudinary) y guarda solo la URL — el
+// binario nunca toca Postgres ni el filesystem del servidor.
+export async function setBusinessLogo(id: string, fileBuffer: Buffer): Promise<BusinessDTO> {
+  await assertBusinessExists(id);
+  const uploaded = await uploadImage(fileBuffer, `traelo/businesses/${id}`);
+  const business = await businessesRepository.update(id, { logoUrl: uploaded.url });
+  await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
   return toDTO(business);
 }

@@ -57,6 +57,36 @@ enum BusinessSettlementStatus {
   PAID
 }
 
+// Origen del pedido. Los pedidos históricos y los que siga registrando el
+// dashboard quedan como MANUAL (default) — ese default preserva su semántica actual.
+enum OrderSource {
+  APP
+  WEB
+  MANUAL
+  TELEGRAM
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+}
+
+// Tipo de entidad del catálogo afectada por un cambio, para la sincronización incremental
+// de la app (ver CatalogChangeLog).
+enum CatalogEntityType {
+  BUSINESS
+  PRODUCT
+  CATEGORY
+  BUSINESS_HOURS
+  BUSINESS_CLOSURE
+  PRODUCT_OFFER
+}
+
+enum CatalogChangeType {
+  UPSERT
+  DELETE
+}
+
 // ── Auth / Usuarios ──────────────────────────────────────
 
 model User {
@@ -126,6 +156,91 @@ model Deliverer {
   @@map("deliverers")
 }
 
+// ── Clientes (app móvil) ──────────────────────────────────
+// Independiente de `User`: User es exclusivamente el usuario interno del dashboard
+// (OWNER/ADMIN/EMPLOYEE/DELIVERER). Customer es quien compra desde la app/web.
+// Todavía sin passwordHash: la app usará un flujo propio (teléfono/OTP) que se
+// diseñará en otra tarea. El teléfono es el identificador principal del cliente.
+
+model Customer {
+  id          String    @id @default(cuid())
+  name        String
+  phone       String    @unique
+  email       String?
+  active      Boolean   @default(true)
+  lastOrderAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  addresses          CustomerAddress[]
+  devices            CustomerDevice[]
+  orders             Order[]
+  favoriteBusinesses CustomerFavoriteBusiness[]
+  favoriteProducts   CustomerFavoriteProduct[]
+
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label      String
+  address    String
+  reference  String?
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Nota: Order.customerAddress / Order.addressReference son snapshots históricos
+  // del pedido y NO se actualizan cuando el cliente edita o borra una dirección aquí.
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+// Preparado para push notifications; sin lógica de Firebase/APNs todavía.
+model CustomerDevice {
+  id         String         @id @default(cuid())
+  customerId String
+  customer   Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  platform   DevicePlatform
+  pushToken  String?
+  appVersion String?
+  active     Boolean        @default(true)
+  lastSeenAt DateTime?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@index([customerId])
+  @@map("customer_devices")
+}
+
+model CustomerFavoriteBusiness {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([customerId, businessId])
+  @@index([customerId])
+  @@map("customer_favorite_businesses")
+}
+
+model CustomerFavoriteProduct {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([customerId, productId])
+  @@index([customerId])
+  @@map("customer_favorite_products")
+}
+
 // ── Negocios / Catálogo ──────────────────────────────────
 
 model Business {
@@ -135,9 +250,20 @@ model Business {
   address                        String
   joinedAt                       DateTime       @default(now())
   active                         Boolean        @default(true)
+  // active = el negocio pertenece a Tráelo. acceptingOrders = puede recibir pedidos ahora mismo
+  // (independiente de active). El horario/BusinessClosure determina además si está abierto.
+  acceptingOrders                Boolean        @default(true)
   commissionType                 CommissionType
   commissionPercentage           Decimal?       @db.Decimal(5, 2)
   defaultProductCommissionAmount Decimal?       @db.Decimal(10, 2)
+  // Tarifa base de mensajería para pedidos creados desde la app (CUP). Default 250; los
+  // negocios con mensajería más cara (ej. DLM, Ella y Yo, La Lomita, Los Reales, Las
+  // Palmitas) se configuran en 350 desde el dashboard. El cálculo final (recargo nocturno,
+  // recargo por negocio extra en pedidos multi-negocio) vive en
+  // orders/delivery-fee-calculator.ts, no acá — esto es solo la tarifa base por negocio.
+  deliveryFeeBase                Decimal        @default(250) @db.Decimal(10, 2)
+  // Fase 22: mismo criterio que Product.imageUrl — solo la URL, versionada al servirla.
+  logoUrl                        String?
   createdAt                      DateTime       @default(now())
   updatedAt                      DateTime       @updatedAt
 
@@ -146,8 +272,11 @@ model Business {
   subscriptions       BusinessSubscription[]
   orderBusinesses     OrderBusiness[]
   businessSettlements BusinessSettlement[]
+  businessHours       BusinessHours[]
+  closures            BusinessClosure[]
+  favoritedBy         CustomerFavoriteBusiness[]
 
-  @@index([active])
+  @@index([active, acceptingOrders])
   @@map("businesses")
 }
 
@@ -191,22 +320,46 @@ model BusinessSubscription {
 }
 
 model Product {
-  id         String   @id @default(cuid())
-  businessId String
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  name       String
-  category   String?
-  price      Decimal? @db.Decimal(10, 2)
-  active     Boolean  @default(true)
-  externalId String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  // Legacy: string libre, se mantiene por compatibilidad con productos existentes.
+  // Nueva navegación estructurada vía categoryId/categoryRef (ver Category). No se elimina
+  // todavía: primero hay que poblar Category y hacer el backfill de categoryId.
+  category    String?
+  categoryId  String?
+  price       Decimal? @db.Decimal(10, 2)
+  active      Boolean  @default(true)
+  // active = pertenece al catálogo. available = tiene stock/está ofreciéndose ahora mismo.
+  // active=true + available=false = "existe en el catálogo pero está agotado".
+  available   Boolean  @default(true)
+  // Independiente de available: el producto SÍ se puede comprar, pero se le avisa al cliente
+  // que queda poco (para que no se lleve una sorpresa si se agota antes de que le respondan
+  // el pedido). No reemplaza available — cuando de verdad se agota, available pasa a false.
+  lowStock    Boolean  @default(false)
+  externalId  String?
+  // Fase 22 del checklist de la app: solo la URL, nunca el binario. Quien la aloja es
+  // responsable de que sea cacheable agresivamente; el catálogo la sirve con un query param
+  // de versión (?v=updatedAt) para que un cambio de imagen invalide el cache del móvil sin
+  // depender de que la URL en sí cambie.
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  commission BusinessProductCommission?
-  orderItems OrderItem[]
+  // Nombrado categoryRef (no category) porque el campo legacy `category` ya ocupa ese
+  // nombre. Cuando se retire el string legacy, este relation field puede renombrarse a
+  // `category` sin tocar la columna categoryId (los relation fields no son columnas).
+  categoryRef Category?                  @relation(fields: [categoryId], references: [id])
+  commission  BusinessProductCommission?
+  orderItems  OrderItem[]
+  offers      ProductOffer[]
+  favoritedBy CustomerFavoriteProduct[]
 
   @@unique([businessId, externalId])
-  @@index([businessId, active])
+  @@index([businessId, active, available])
+  @@index([categoryId])
   @@map("products")
 }
 
@@ -223,6 +376,79 @@ model BusinessProductCommission {
   @@map("business_product_commissions")
 }
 
+// Categoría global de catálogo (no pertenece a un negocio en particular). Navegación y
+// búsqueda de la app. Ver comentario en Product.category sobre la estrategia de transición
+// desde el string legacy.
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  icon      String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+// Precio promocional temporal. NO reemplaza Product.price (precio normal/referencial):
+// el precio efectivo de un pedido siempre queda congelado en OrderItem.unitPrice al momento
+// de la compra. El cálculo de qué precio aplicar (normal vs. oferta vigente) es lógica de
+// aplicación, fuera del alcance de esta tarea.
+model ProductOffer {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price     Decimal  @db.Decimal(10, 2)
+  startsAt  DateTime
+  endsAt    DateTime
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([active, startsAt, endsAt])
+  @@map("product_offers")
+}
+
+// Horario habitual semanal. Un cierre puntual (ej. mantenimiento de un día) se resuelve con
+// BusinessClosure, no modificando este horario. Un solo turno por día (sin franjas partidas)
+// — suficiente para el alcance actual, evita sobreingeniería.
+model BusinessHours {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  dayOfWeek  Int // 0 = domingo … 6 = sábado (convención JS Date#getDay())
+  openTime   DateTime @db.Time()
+  closeTime  DateTime @db.Time()
+  closed     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([businessId, dayOfWeek])
+  @@index([businessId])
+  @@map("business_hours")
+}
+
+// Cierre excepcional de un día puntual (mantenimiento, feriado, etc.) sin tocar el horario
+// habitual en BusinessHours.
+model BusinessClosure {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  reason     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([businessId, date])
+  @@index([businessId])
+  @@map("business_closures")
+}
+
 // ── Pedidos ──────────────────────────────────────────────
 
 model Order {
@@ -234,20 +460,43 @@ model Order {
   customerPhone    String
   deliveryFee      Decimal     @db.Decimal(10, 2)
   status           OrderStatus @default(PENDING)
+  // Todos los pedidos existentes fueron registrados manualmente por el equipo desde el
+  // dashboard — MANUAL preserva exactamente ese comportamiento histórico.
+  source           OrderSource @default(MANUAL)
   orderDate        DateTime    @default(now())
   assignedAt       DateTime?
   completedAt      DateTime?
   cancelledAt      DateTime?
 
+  // Cliente de la app/web, si el pedido está vinculado a uno. Nullable: hay pedidos
+  // manuales sin Customer y seguirá habiendo (empleado ↔ cliente desconocido/no registrado).
+  // customerName/customerPhone/customerAddress/addressReference arriba son el snapshot
+  // histórico del pedido y NUNCA cambian si el Customer edita sus datos después.
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  // Idempotencia (Fase 13 del checklist de la app): la app manda un id generado en el
+  // cliente por intento de checkout. Si la misma request llega dos veces (mala conexión,
+  // timeout, doble tap), la segunda encuentra este unique y devuelve el pedido ya creado en
+  // vez de duplicarlo. Nullable/único: los pedidos manuales del dashboard nunca lo usan.
+  clientRequestId String? @unique
+
   delivererId String?
   deliverer   Deliverer? @relation("OrderDeliverer", fields: [delivererId], references: [id])
 
-  registeredByUserId String
-  registeredBy       User   @relation("OrderRegisteredBy", fields: [registeredByUserId], references: [id])
+  // Nullable: un pedido creado por un Customer desde la app no tiene un User de staff detrás
+  // (customerId = X, registeredByUserId = null). Los pedidos manuales del dashboard lo siguen
+  // llenando siempre — ese flujo no cambia.
+  registeredByUserId String?
+  registeredBy       User?   @relation("OrderRegisteredBy", fields: [registeredByUserId], references: [id])
 
   productsTotal Decimal @db.Decimal(10, 2) // subtotal de productos — 100% del negocio, nunca se toca
   platformFee   Decimal @default(0) @db.Decimal(10, 2) // "Servicio Tráelo": suma de comisiones por negocio, redondeada hacia arriba al múltiplo de 10. 0 en pedidos previos a este cambio (nunca tuvieron un cargo separado).
   total         Decimal @db.Decimal(10, 2) // productsTotal + deliveryFee + platformFee
+
+  // Número del "🎟️ Número del Sorteo" del vale, cuando el pedido participa de una promoción
+  // vigente. Opcional: no todos los pedidos ni todas las épocas tienen sorteo activo.
+  raffleNumber Int?
 
   traeloEarning       Decimal @db.Decimal(10, 2) // ganancia total de Tráelo = platformFee + traeloDeliveryShare
   delivererEarning    Decimal @db.Decimal(10, 2)
@@ -262,6 +511,7 @@ model Order {
   @@index([status])
   @@index([orderDate])
   @@index([delivererId])
+  @@index([customerId])
   @@map("orders")
 }
 
@@ -352,7 +602,44 @@ model SettlementOrderLine {
 model SystemConfig {
   id                                   String   @id @default("singleton")
   defaultDelivererCommissionPercentage Decimal  @default(60) @db.Decimal(5, 2)
-  updatedAt                            DateTime @updatedAt
+
+  // Bloque promocional opcional que se agrega al final del vale generado (p.ej. campaña de
+  // sorteo). rafflePromoText vacío/null = no agregar nada al vale, sin necesidad de un flag
+  // "activo" aparte.
+  rafflePromoText String?
+  raffleVideoUrl  String?
+
+  updatedAt DateTime @updatedAt
 
   @@map("system_config")
+}
+
+// Contador global del catálogo (fila única, mismo patrón que SystemConfig). La app móvil
+// hace GET del valor actual al abrir y lo compara con el que tiene cacheado localmente para
+// decidir si necesita sincronizar. La capa de servicio (fuera de esta tarea) es responsable
+// de incrementarlo cada vez que cambie Business/Product/Category/precio/disponibilidad/
+// horario/oferta/estado operativo.
+model CatalogState {
+  id        String   @id @default("singleton")
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@map("catalog_state")
+}
+
+// Log mínimo para "GET changes since version X": una fila por entidad de catálogo que
+// cambió, con la versión de CatalogState vigente en ese momento. La app pide
+// WHERE version > X ORDER BY version y vuelve a pedir esas entidades por su endpoint normal
+// — este log no duplica los datos de la entidad, solo señala qué cambió.
+model CatalogChangeLog {
+  id         String            @id @default(cuid())
+  version    Int
+  entityType CatalogEntityType
+  entityId   String
+  changeType CatalogChangeType @default(UPSERT)
+  createdAt  DateTime          @default(now())
+
+  @@index([version])
+  @@index([entityType, entityId])
+  @@map("catalog_change_log")
 }

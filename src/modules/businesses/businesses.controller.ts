@@ -1,10 +1,12 @@
 import type { Request, Response } from 'express';
 import { sendCreated, sendOk, sendPaginated } from '../../shared/http';
+import { BadRequestError } from '../../shared/errors';
 import * as businessesService from './businesses.service';
 import type {
   BusinessIdParam,
   CreateBusinessInput,
   ListBusinessesQuery,
+  SetAcceptingOrdersInput,
   UpdateBusinessInput,
 } from './businesses.dto';
 
@@ -34,5 +36,23 @@ export async function updateBusiness(req: Request, res: Response): Promise<void>
 export async function deactivateBusiness(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as BusinessIdParam;
   const business = await businessesService.deactivateBusiness(id);
+  sendOk(res, business);
+}
+
+export async function setAcceptingOrders(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as BusinessIdParam;
+  const business = await businessesService.setAcceptingOrders(
+    id,
+    req.body as SetAcceptingOrdersInput,
+  );
+  sendOk(res, business);
+}
+
+export async function setLogo(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as BusinessIdParam;
+  if (!req.file) {
+    throw new BadRequestError('Falta el archivo de imagen (campo "image")', 'MISSING_FILE');
+  }
+  const business = await businessesService.setBusinessLogo(id, req.file.buffer);
   sendOk(res, business);
 }
