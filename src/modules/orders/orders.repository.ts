@@ -22,6 +22,19 @@ export function findById(id: string) {
   return prisma.order.findUnique({ where: { id }, include: orderInclude });
 }
 
+export function findByClientRequestId(clientRequestId: string) {
+  return prisma.order.findUnique({ where: { clientRequestId }, include: orderInclude });
+}
+
+// Antispam (Fase 14): el pedido PENDING más reciente de este teléfono, creado desde la app,
+// dentro de la ventana de cooldown — null si no hay ninguno (puede reordenar).
+export function findRecentPendingAppOrderByPhone(customerPhone: string, since: Date) {
+  return prisma.order.findFirst({
+    where: { customerPhone, source: 'APP', status: 'PENDING', orderDate: { gte: since } },
+    orderBy: { orderDate: 'desc' },
+  });
+}
+
 export function findMany(where: Prisma.OrderWhereInput, skip: number, take: number) {
   return prisma.order.findMany({
     where,

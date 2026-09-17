@@ -2,7 +2,7 @@
 -- usuarios internos, direcciones, favoritos, dispositivos, categorías estructuradas,
 -- ofertas, horarios de negocio y versionado de catálogo para sincronización incremental.
 --
--- Todo es aditivo y no destructivo:
+-- Todo es aditivo/relajante y no destructivo:
 --   * Ninguna columna ni tabla existente se elimina ni se renombra.
 --   * Las columnas nuevas en tablas existentes (orders, businesses, products) son
 --     NULLABLE o llevan DEFAULT, así que los pedidos/negocios/productos históricos
@@ -10,6 +10,9 @@
 --   * Los dos índices que cambian de forma (businesses, products) se recrean como
 --     superconjunto del índice anterior: cualquier consulta que usaba el índice viejo
 --     sigue funcionando igual con el nuevo.
+--   * El único cambio sobre una columna existente es relajar orders.registeredByUserId a
+--     NULLABLE (DROP NOT NULL) — nunca puede fallar por datos existentes, todos los pedidos
+--     ya tienen un valor no nulo ahí.
 
 -- ── Enums ────────────────────────────────────────────────
 
@@ -133,7 +136,11 @@ ALTER TABLE "customer_favorite_products" ADD CONSTRAINT "customer_favorite_produ
 
 -- AlterTable: acceptingOrders es independiente de active (ver comentario en schema.prisma).
 -- DEFAULT true preserva el comportamiento actual: todo negocio activo sigue recibiendo pedidos.
-ALTER TABLE "businesses" ADD COLUMN "acceptingOrders" BOOLEAN NOT NULL DEFAULT true;
+-- deliveryFeeBase es la tarifa base de mensajería para pedidos de la app (CUP); DEFAULT 250
+-- dejar los negocios existentes en la tarifa estándar — los 5 negocios con mensajería a 350
+-- se configuran a mano desde el dashboard después de este deploy.
+ALTER TABLE "businesses" ADD COLUMN "acceptingOrders" BOOLEAN NOT NULL DEFAULT true,
+                         ADD COLUMN "deliveryFeeBase" DECIMAL(10,2) NOT NULL DEFAULT 250;
 
 -- CreateTable
 CREATE TABLE "business_hours" (
@@ -256,6 +263,23 @@ CREATE INDEX "orders_customerId_idx" ON "orders"("customerId");
 -- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "customers"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+-- AlterTable: registeredByUserId pasa a ser nullable — un pedido creado por un Customer
+-- desde la app no tiene un User de staff detrás. Relajar un NOT NULL es siempre seguro (no
+-- reescribe filas, no puede fallar por datos existentes); los pedidos manuales del dashboard
+-- lo siguen llenando siempre, ese flujo no cambia. El FK pasa de RESTRICT a SET NULL, el
+-- comportamiento por defecto de Prisma para una relación opcional.
+ALTER TABLE "orders" ALTER COLUMN "registeredByUserId" DROP NOT NULL;
+
+ALTER TABLE "orders" DROP CONSTRAINT "orders_registeredByUserId_fkey";
+ALTER TABLE "orders" ADD CONSTRAINT "orders_registeredByUserId_fkey" FOREIGN KEY ("registeredByUserId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AlterTable: clientRequestId para idempotencia de checkout — nullable/único, los pedidos
+-- manuales del dashboard nunca lo usan.
+ALTER TABLE "orders" ADD COLUMN "clientRequestId" TEXT;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "orders_clientRequestId_key" ON "orders"("clientRequestId");
+
 -- ── Versionado de catálogo (sincronización incremental) ──
 
 -- CreateTable
@@ -284,3 +308,14 @@ CREATE INDEX "catalog_change_log_version_idx" ON "catalog_change_log"("version")
 
 -- CreateIndex
 CREATE INDEX "catalog_change_log_entityType_entityId_idx" ON "catalog_change_log"("entityType", "entityId");
+
+-- ── Imágenes (Fase 22: solo URL, nunca binario) ──────────
+
+ALTER TABLE "products" ADD COLUMN "imageUrl" TEXT;
+
+ALTER TABLE "businesses" ADD COLUMN "logoUrl" TEXT;
+
+-- AlterTable: descripción de producto (opcional) y lowStock (independiente de available —
+-- "queda poco" vs. "agotado").
+ALTER TABLE "products" ADD COLUMN "description" TEXT,
+                        ADD COLUMN "lowStock" BOOLEAN NOT NULL DEFAULT false;

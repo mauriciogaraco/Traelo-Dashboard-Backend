@@ -25,6 +25,8 @@ export const createBusinessSchema = z
     commissionType: z.enum(CommissionType),
     commissionPercentage: z.coerce.number().min(0).max(100).optional(),
     defaultProductCommissionAmount: z.coerce.number().min(0).optional(),
+    deliveryFeeBase: z.coerce.number().min(0).optional(),
+    logoUrl: z.url('URL de logo inválida').optional(),
   })
   .refine(
     (data) => data.commissionType !== 'PERCENTAGE' || data.commissionPercentage !== undefined,
@@ -51,9 +53,18 @@ export const updateBusinessSchema = z.object({
   phone: z.string().min(6).max(30).optional(),
   address: z.string().min(3).max(300).optional(),
   active: z.boolean().optional(),
+  acceptingOrders: z.boolean().optional(),
   commissionType: z.enum(CommissionType).optional(),
   commissionPercentage: z.coerce.number().min(0).max(100).optional(),
   defaultProductCommissionAmount: z.coerce.number().min(0).optional(),
+  deliveryFeeBase: z.coerce.number().min(0).optional(),
+  logoUrl: z.url('URL de logo inválida').nullable().optional(),
 });
 
 export type UpdateBusinessInput = z.infer<typeof updateBusinessSchema>;
+
+export const setAcceptingOrdersSchema = z.object({
+  acceptingOrders: z.boolean(),
+});
+
+export type SetAcceptingOrdersInput = z.infer<typeof setAcceptingOrdersSchema>;

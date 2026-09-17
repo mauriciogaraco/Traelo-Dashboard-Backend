@@ -6,17 +6,23 @@ const SINGLETON_ID = 'singleton';
 
 export interface SystemConfigDTO {
   defaultDelivererCommissionPercentage: number;
+  rafflePromoText: string | null;
+  raffleVideoUrl: string | null;
   updatedAt: Date;
 }
 
 function toDTO(config: {
   defaultDelivererCommissionPercentage: Prisma.Decimal;
+  rafflePromoText: string | null;
+  raffleVideoUrl: string | null;
   updatedAt: Date;
 }): SystemConfigDTO {
   return {
     defaultDelivererCommissionPercentage: decimalToNumber(
       config.defaultDelivererCommissionPercentage,
     ),
+    rafflePromoText: config.rafflePromoText,
+    raffleVideoUrl: config.raffleVideoUrl,
     updatedAt: config.updatedAt,
   };
 }
@@ -34,10 +40,16 @@ export async function getSystemConfig(): Promise<SystemConfigDTO> {
 export async function updateSystemConfig(input: UpdateSystemConfigInput): Promise<SystemConfigDTO> {
   const config = await prisma.systemConfig.upsert({
     where: { id: SINGLETON_ID },
-    update: { defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage },
+    update: {
+      defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage,
+      rafflePromoText: input.rafflePromoText,
+      raffleVideoUrl: input.raffleVideoUrl,
+    },
     create: {
       id: SINGLETON_ID,
-      defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage,
+      defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage ?? 60,
+      rafflePromoText: input.rafflePromoText,
+      raffleVideoUrl: input.raffleVideoUrl,
     },
   });
 

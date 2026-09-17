@@ -2,16 +2,20 @@ import { Router } from 'express';
 import { authenticate } from '../../middlewares/authenticate';
 import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
+import { imageUpload } from '../../middlewares/imageUpload';
 import { Role } from '../../generated/prisma/enums';
 import * as businessesController from './businesses.controller';
 import {
   businessIdParamSchema,
   createBusinessSchema,
   listBusinessesQuerySchema,
+  setAcceptingOrdersSchema,
   updateBusinessSchema,
 } from './businesses.dto';
 import { productsRouter } from './products.routes';
 import { subscriptionsRouter } from './subscriptions.routes';
+import { businessHoursRouter } from './business-hours.routes';
+import { businessClosuresRouter } from './business-closures.routes';
 
 export const businessesRouter = Router();
 
@@ -52,5 +56,22 @@ businessesRouter.delete(
   businessesController.deactivateBusiness,
 );
 
+businessesRouter.patch(
+  '/:id/accepting-orders',
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  validate({ params: businessIdParamSchema, body: setAcceptingOrdersSchema }),
+  businessesController.setAcceptingOrders,
+);
+
+businessesRouter.post(
+  '/:id/logo',
+  authorize(Role.OWNER, Role.ADMIN),
+  validate({ params: businessIdParamSchema }),
+  imageUpload.single('image'),
+  businessesController.setLogo,
+);
+
 businessesRouter.use('/:id/products', productsRouter);
 businessesRouter.use('/:id/subscriptions', subscriptionsRouter);
+businessesRouter.use('/:id/hours', businessHoursRouter);
+businessesRouter.use('/:id/closures', businessClosuresRouter);

@@ -256,6 +256,14 @@ model Business {
   commissionType                 CommissionType
   commissionPercentage           Decimal?       @db.Decimal(5, 2)
   defaultProductCommissionAmount Decimal?       @db.Decimal(10, 2)
+  // Tarifa base de mensajería para pedidos creados desde la app (CUP). Default 250; los
+  // negocios con mensajería más cara (ej. DLM, Ella y Yo, La Lomita, Los Reales, Las
+  // Palmitas) se configuran en 350 desde el dashboard. El cálculo final (recargo nocturno,
+  // recargo por negocio extra en pedidos multi-negocio) vive en
+  // orders/delivery-fee-calculator.ts, no acá — esto es solo la tarifa base por negocio.
+  deliveryFeeBase                Decimal        @default(250) @db.Decimal(10, 2)
+  // Fase 22: mismo criterio que Product.imageUrl — solo la URL, versionada al servirla.
+  logoUrl                        String?
   createdAt                      DateTime       @default(now())
   updatedAt                      DateTime       @updatedAt
 
@@ -312,23 +320,33 @@ model BusinessSubscription {
 }
 
 model Product {
-  id         String   @id @default(cuid())
-  businessId String
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  name       String
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
   // Legacy: string libre, se mantiene por compatibilidad con productos existentes.
   // Nueva navegación estructurada vía categoryId/categoryRef (ver Category). No se elimina
   // todavía: primero hay que poblar Category y hacer el backfill de categoryId.
-  category   String?
-  categoryId String?
-  price      Decimal? @db.Decimal(10, 2)
-  active     Boolean  @default(true)
+  category    String?
+  categoryId  String?
+  price       Decimal? @db.Decimal(10, 2)
+  active      Boolean  @default(true)
   // active = pertenece al catálogo. available = tiene stock/está ofreciéndose ahora mismo.
   // active=true + available=false = "existe en el catálogo pero está agotado".
-  available  Boolean  @default(true)
-  externalId String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  available   Boolean  @default(true)
+  // Independiente de available: el producto SÍ se puede comprar, pero se le avisa al cliente
+  // que queda poco (para que no se lleve una sorpresa si se agota antes de que le respondan
+  // el pedido). No reemplaza available — cuando de verdad se agota, available pasa a false.
+  lowStock    Boolean  @default(false)
+  externalId  String?
+  // Fase 22 del checklist de la app: solo la URL, nunca el binario. Quien la aloja es
+  // responsable de que sea cacheable agresivamente; el catálogo la sirve con un query param
+  // de versión (?v=updatedAt) para que un cambio de imagen invalide el cache del móvil sin
+  // depender de que la URL en sí cambie.
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Nombrado categoryRef (no category) porque el campo legacy `category` ya ocupa ese
   // nombre. Cuando se retire el string legacy, este relation field puede renombrarse a
@@ -457,15 +475,28 @@ model Order {
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id])
 
+  // Idempotencia (Fase 13 del checklist de la app): la app manda un id generado en el
+  // cliente por intento de checkout. Si la misma request llega dos veces (mala conexión,
+  // timeout, doble tap), la segunda encuentra este unique y devuelve el pedido ya creado en
+  // vez de duplicarlo. Nullable/único: los pedidos manuales del dashboard nunca lo usan.
+  clientRequestId String? @unique
+
   delivererId String?
   deliverer   Deliverer? @relation("OrderDeliverer", fields: [delivererId], references: [id])
 
-  registeredByUserId String
-  registeredBy       User   @relation("OrderRegisteredBy", fields: [registeredByUserId], references: [id])
+  // Nullable: un pedido creado por un Customer desde la app no tiene un User de staff detrás
+  // (customerId = X, registeredByUserId = null). Los pedidos manuales del dashboard lo siguen
+  // llenando siempre — ese flujo no cambia.
+  registeredByUserId String?
+  registeredBy       User?   @relation("OrderRegisteredBy", fields: [registeredByUserId], references: [id])
 
   productsTotal Decimal @db.Decimal(10, 2) // subtotal de productos — 100% del negocio, nunca se toca
   platformFee   Decimal @default(0) @db.Decimal(10, 2) // "Servicio Tráelo": suma de comisiones por negocio, redondeada hacia arriba al múltiplo de 10. 0 en pedidos previos a este cambio (nunca tuvieron un cargo separado).
   total         Decimal @db.Decimal(10, 2) // productsTotal + deliveryFee + platformFee
+
+  // Número del "🎟️ Número del Sorteo" del vale, cuando el pedido participa de una promoción
+  // vigente. Opcional: no todos los pedidos ni todas las épocas tienen sorteo activo.
+  raffleNumber Int?
 
   traeloEarning       Decimal @db.Decimal(10, 2) // ganancia total de Tráelo = platformFee + traeloDeliveryShare
   delivererEarning    Decimal @db.Decimal(10, 2)
@@ -571,7 +602,14 @@ model SettlementOrderLine {
 model SystemConfig {
   id                                   String   @id @default("singleton")
   defaultDelivererCommissionPercentage Decimal  @default(60) @db.Decimal(5, 2)
-  updatedAt                            DateTime @updatedAt
+
+  // Bloque promocional opcional que se agrega al final del vale generado (p.ej. campaña de
+  // sorteo). rafflePromoText vacío/null = no agregar nada al vale, sin necesidad de un flag
+  // "activo" aparte.
+  rafflePromoText String?
+  raffleVideoUrl  String?
+
+  updatedAt DateTime @updatedAt
 
   @@map("system_config")
 }
