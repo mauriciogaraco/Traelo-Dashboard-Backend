@@ -8,6 +8,7 @@ import type { Prisma } from '../../generated/prisma/client';
 import * as businessesRepository from './businesses.repository';
 import * as productsRepository from './products.repository';
 import * as categoriesService from '../categories/categories.service';
+import { packagingToDb, parsePackaging, type PackagingOption } from './packaging';
 import type {
   CreateProductInput,
   ListProductsQuery,
@@ -33,6 +34,8 @@ export interface ProductDTO {
   lowStock: boolean;
   externalId: string | null;
   imageUrl: string | null;
+  imageBlurhash: string | null;
+  packaging: PackagingOption[] | null;
   commission: ProductCommissionDTO | null;
   createdAt: Date;
   updatedAt: Date;
@@ -51,6 +54,8 @@ interface ProductRecord {
   lowStock: boolean;
   externalId: string | null;
   imageUrl: string | null;
+  imageBlurhash: string | null;
+  packaging: Prisma.JsonValue | null;
   commission: { commissionAmount: Prisma.Decimal } | null;
   createdAt: Date;
   updatedAt: Date;
@@ -70,6 +75,8 @@ function toDTO(product: ProductRecord): ProductDTO {
     lowStock: product.lowStock,
     externalId: product.externalId,
     imageUrl: product.imageUrl,
+    imageBlurhash: product.imageBlurhash,
+    packaging: parsePackaging(product.packaging),
     commission: product.commission
       ? { commissionAmount: decimalToNumber(product.commission.commissionAmount) }
       : null,
@@ -111,6 +118,7 @@ export async function createProduct(
     price: input.price,
     externalId: input.externalId,
     imageUrl: input.imageUrl,
+    packaging: packagingToDb(input.packaging),
   });
 
   await bumpCatalogVersion(CatalogEntityType.PRODUCT, product.id, CatalogChangeType.UPSERT);
@@ -156,7 +164,13 @@ export async function updateProduct(
     await categoriesService.assertCategoryExists(input.categoryId);
   }
 
-  const product = await productsRepository.update(productId, input);
+  // Mismo criterio que updateBusiness: un imageUrl puesto a mano invalida el blurhash anterior.
+  const { packaging, ...fields } = input;
+  const product = await productsRepository.update(productId, {
+    ...fields,
+    packaging: packagingToDb(packaging),
+    ...(input.imageUrl !== undefined ? { imageBlurhash: null } : {}),
+  });
   await bumpCatalogVersion(CatalogEntityType.PRODUCT, product.id, CatalogChangeType.UPSERT);
   return toDTO(product);
 }
@@ -194,7 +208,10 @@ export async function setProductImage(
 ): Promise<ProductDTO> {
   await assertProductExists(businessId, productId);
   const uploaded = await uploadImage(fileBuffer, `traelo/businesses/${businessId}/products`);
-  const product = await productsRepository.update(productId, { imageUrl: uploaded.url });
+  const product = await productsRepository.update(productId, {
+    imageUrl: uploaded.url,
+    imageBlurhash: uploaded.blurhash,
+  });
   await bumpCatalogVersion(CatalogEntityType.PRODUCT, product.id, CatalogChangeType.UPSERT);
   return toDTO(product);
 }

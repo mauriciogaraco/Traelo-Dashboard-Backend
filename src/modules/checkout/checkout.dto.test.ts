@@ -8,68 +8,73 @@ const validBusinesses = [
   },
 ];
 
-describe('checkoutOrderSchema — flujo con customerId', () => {
-  it('acepta customerId + addressId', () => {
+describe('checkoutOrderSchema', () => {
+  it('acepta un pedido de invitado completo (nombre, teléfono y dirección)', () => {
     const result = checkoutOrderSchema.safeParse({
-      customerId: 'clx0000000000000000000002',
-      addressId: 'clx0000000000000000000003',
+      customerName: 'Cliente Invitado',
+      customerPhone: '+53 5555 0000',
+      address: 'Calle 10 #123',
+      addressReference: 'Frente al parque',
       businesses: validBusinesses,
     });
     expect(result.success).toBe(true);
   });
 
-  it('acepta customerId + address libre', () => {
-    const result = checkoutOrderSchema.safeParse({
-      customerId: 'clx0000000000000000000002',
-      address: 'Calle 10 #123',
-      businesses: validBusinesses,
-    });
-    expect(result.success).toBe(true);
-  });
-});
-
-describe('checkoutOrderSchema — flujo invitado (sin customerId)', () => {
-  it('acepta customerName + customerPhone + address, sin customerId', () => {
-    const result = checkoutOrderSchema.safeParse({
-      customerName: 'Cliente Invitado',
-      customerPhone: '+53 5555 0000',
-      address: 'Calle 10 #123',
-      businesses: validBusinesses,
-    });
-    expect(result.success).toBe(true);
+  it('acepta addressId o address sin nombre/teléfono (el cliente autenticado usa los de su cuenta)', () => {
+    expect(
+      checkoutOrderSchema.safeParse({
+        addressId: 'clx0000000000000000000003',
+        businesses: validBusinesses,
+      }).success,
+    ).toBe(true);
+    expect(
+      checkoutOrderSchema.safeParse({ address: 'Calle 10 #123', businesses: validBusinesses })
+        .success,
+    ).toBe(true);
   });
 
-  it('rechaza si falta customerName o customerPhone y no hay customerId', () => {
-    const missingPhone = checkoutOrderSchema.safeParse({
-      customerName: 'Cliente Invitado',
-      address: 'Calle 10 #123',
-      businesses: validBusinesses,
-    });
-    expect(missingPhone.success).toBe(false);
-
-    const missingName = checkoutOrderSchema.safeParse({
-      customerPhone: '+53 5555 0000',
-      address: 'Calle 10 #123',
-      businesses: validBusinesses,
-    });
-    expect(missingName.success).toBe(false);
-  });
-
-  it('rechaza addressId sin customerId (un invitado no tiene direcciones guardadas)', () => {
+  it('exige addressId o address', () => {
     const result = checkoutOrderSchema.safeParse({
-      customerName: 'Cliente Invitado',
+      customerName: 'Cliente',
       customerPhone: '+53 5555 0000',
-      addressId: 'clx0000000000000000000003',
       businesses: validBusinesses,
     });
     expect(result.success).toBe(false);
   });
 
-  it('rechaza si no viene ni customerId ni customerName/customerPhone', () => {
+  it('IGNORA un customerId enviado en el body: la identidad sale solo del token', () => {
     const result = checkoutOrderSchema.safeParse({
+      customerId: 'clx0000000000000000000002',
+      customerName: 'Cliente',
+      customerPhone: '+53 5555 0000',
+      address: 'Calle 10 #123',
+      businesses: validBusinesses,
+    });
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('customerId');
+  });
+
+  it('rechaza teléfonos sin forma de teléfono', () => {
+    const result = checkoutOrderSchema.safeParse({
+      customerName: 'Cliente',
+      customerPhone: 'abcdefgh',
       address: 'Calle 10 #123',
       businesses: validBusinesses,
     });
     expect(result.success).toBe(false);
+  });
+
+  it('nunca acepta precios ni costos: se descartan deliveryFee y platformFeeOverride', () => {
+    const result = checkoutOrderSchema.safeParse({
+      customerName: 'Cliente',
+      customerPhone: '+53 5555 0000',
+      address: 'Calle 10 #123',
+      deliveryFee: 0,
+      platformFeeOverride: 0,
+      businesses: validBusinesses,
+    });
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('deliveryFee');
+    expect(result.data).not.toHaveProperty('platformFeeOverride');
   });
 });

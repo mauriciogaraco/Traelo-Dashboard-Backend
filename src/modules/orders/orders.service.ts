@@ -178,6 +178,19 @@ export async function getOrderByClientRequestId(clientRequestId: string): Promis
   return order ? toDTO(order) : null;
 }
 
+// Hash del token de acceso de invitado de un pedido (null si no es un pedido de invitado).
+// El hash nunca sale en OrderDTO: solo se compara dentro del backend.
+export async function getGuestAccessTokenHash(orderId: string): Promise<string | null> {
+  const order = await ordersRepository.findById(orderId);
+  return order?.guestAccessTokenHash ?? null;
+}
+
+// Pedido de invitado a partir del hash de su token (autorización por posesión del token).
+export async function findOrderByGuestAccessTokenHash(hash: string): Promise<OrderDTO | null> {
+  const order = await ordersRepository.findByGuestAccessTokenHash(hash);
+  return order ? toDTO(order) : null;
+}
+
 async function resolveEffectivePercentage(deliverer: {
   commissionPercentage: Prisma.Decimal | null;
 }): Promise<number> {
@@ -279,9 +292,17 @@ function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
   }));
 }
 
+export interface CreateOrderOptions {
+  // Solo pedidos de invitado hechos por /checkout: hash SHA-256 del token que se le entrega al
+  // dispositivo para seguir el pedido sin cuenta. No forma parte de CreateOrderInput a
+  // propósito: el dashboard (POST /orders) nunca debe poder fijarlo.
+  guestAccessTokenHash?: string;
+}
+
 export async function createOrder(
   input: CreateOrderInput,
   registeredByUserId?: string,
+  options: CreateOrderOptions = {},
 ): Promise<OrderDTO> {
   // Idempotencia (Fase 13): si ya existe un pedido con este clientRequestId, la request es un
   // reintento (mala conexión, timeout, doble tap) — se devuelve el pedido ya creado en vez de
@@ -345,6 +366,7 @@ export async function createOrder(
       delivererEarning: new Prisma.Decimal(0),
       source: input.source ?? 'MANUAL',
       clientRequestId: input.clientRequestId,
+      guestAccessTokenHash: options.guestAccessTokenHash,
       raffleNumber: input.raffleNumber,
       ...(registeredByUserId ? { registeredBy: { connect: { id: registeredByUserId } } } : {}),
       ...(input.customerId ? { customer: { connect: { id: input.customerId } } } : {}),

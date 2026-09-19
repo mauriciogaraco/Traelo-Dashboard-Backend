@@ -6,6 +6,7 @@ import * as catalogRepository from './catalog.repository';
 import * as categoriesRepository from '../categories/categories.repository';
 import { isBusinessOpen } from '../businesses/business-status.service';
 import { resolveEffectivePrice } from '../businesses/effective-price';
+import { parsePackaging, type PackagingOption } from '../businesses/packaging';
 import type {
   ListCatalogBusinessesQuery,
   ListCatalogChangesQuery,
@@ -43,6 +44,8 @@ export interface CatalogBusinessDTO {
   isOpenNow: boolean;
   // Fase 22: con ?v=<updatedAt> para que un logo nuevo invalide el cache del móvil.
   logoUrl: string | null;
+  // Placeholder mientras carga logoUrl (https://blurha.sh); null si el logo no tiene blurhash.
+  logoBlurhash: string | null;
   hours: CatalogBusinessHoursDTO[];
 }
 
@@ -73,6 +76,9 @@ export interface CatalogProductDTO {
   offer: CatalogProductOfferDTO | null;
   // Fase 22: con ?v=<updatedAt> para que una imagen nueva invalide el cache del móvil.
   imageUrl: string | null;
+  imageBlurhash: string | null;
+  // Opciones de empaque a elegir al comprar ([{ name, price, capacity? }]); null = sin empaque.
+  packaging: PackagingOption[] | null;
   // El catálogo solo lista productos con available=true (ver findCatalogProducts) — lowStock
   // es la señal de "todavía se puede comprar, pero se puede agotar pronto".
   lowStock: boolean;
@@ -98,6 +104,7 @@ interface CatalogBusinessRecord {
   address: string;
   acceptingOrders: boolean;
   logoUrl: string | null;
+  logoBlurhash: string | null;
   updatedAt: Date;
   businessHours: { dayOfWeek: number; openTime: Date; closeTime: Date; closed: boolean }[];
 }
@@ -111,6 +118,8 @@ interface CatalogProductRecord {
   categoryId: string | null;
   price: Prisma.Decimal | null;
   imageUrl: string | null;
+  imageBlurhash: string | null;
+  packaging: Prisma.JsonValue | null;
   lowStock: boolean;
   updatedAt: Date;
   categoryRef: { name: string } | null;
@@ -140,6 +149,7 @@ async function toBusinessDTO(
     acceptingOrders: business.acceptingOrders,
     isOpenNow: status.open,
     logoUrl: versionedUrl(business.logoUrl, business.updatedAt),
+    logoBlurhash: business.logoBlurhash,
     hours: business.businessHours.map((h) => ({
       dayOfWeek: h.dayOfWeek,
       openTime: timeToString(h.openTime),
@@ -184,6 +194,8 @@ function toProductDTO(product: CatalogProductRecord): CatalogProductDTO {
     effectivePrice: effective?.price ?? null,
     offer,
     imageUrl: versionedUrl(product.imageUrl, product.updatedAt),
+    imageBlurhash: product.imageBlurhash,
+    packaging: parsePackaging(product.packaging),
     lowStock: product.lowStock,
   };
 }

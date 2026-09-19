@@ -17,7 +17,8 @@ categoriesRouter.use(authenticate);
 
 categoriesRouter.get(
   '/',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  // El dueño de negocio solo la necesita para elegir categoría al editar sus productos.
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.BUSINESS_OWNER),
   validate({ query: listCategoriesQuerySchema }),
   categoriesController.listCategories,
 );

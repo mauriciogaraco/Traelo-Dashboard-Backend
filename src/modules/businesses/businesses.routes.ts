@@ -3,6 +3,7 @@ import { authenticate } from '../../middlewares/authenticate';
 import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { imageUpload } from '../../middlewares/imageUpload';
+import { restrictBusinessOwnerToOwnBusiness } from '../../shared/business-scope';
 import { Role } from '../../generated/prisma/enums';
 import * as businessesController from './businesses.controller';
 import {
@@ -37,7 +38,8 @@ businessesRouter.post(
 
 businessesRouter.get(
   '/:id',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: businessIdParamSchema }),
   businessesController.getBusiness,
 );
@@ -58,14 +60,16 @@ businessesRouter.delete(
 
 businessesRouter.patch(
   '/:id/accepting-orders',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: businessIdParamSchema, body: setAcceptingOrdersSchema }),
   businessesController.setAcceptingOrders,
 );
 
 businessesRouter.post(
   '/:id/logo',
-  authorize(Role.OWNER, Role.ADMIN),
+  authorize(Role.OWNER, Role.ADMIN, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: businessIdParamSchema }),
   imageUpload.single('image'),
   businessesController.setLogo,

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { Role } from '../../generated/prisma/enums';
+import { restrictBusinessOwnerToOwnBusiness } from '../../shared/business-scope';
 import { businessIdParamSchema } from './businesses.dto';
 import * as businessHoursController from './business-hours.controller';
 import { businessHoursParamsSchema, upsertBusinessHoursSchema } from './business-hours.dto';
@@ -12,20 +13,23 @@ businessHoursRouter.use(validate({ params: businessIdParamSchema }));
 
 businessHoursRouter.get(
   '/',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   businessHoursController.listBusinessHours,
 );
 
 businessHoursRouter.put(
   '/:dayOfWeek',
-  authorize(Role.OWNER, Role.ADMIN),
+  authorize(Role.OWNER, Role.ADMIN, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: businessHoursParamsSchema, body: upsertBusinessHoursSchema }),
   businessHoursController.upsertBusinessHours,
 );
 
 businessHoursRouter.delete(
   '/:dayOfWeek',
-  authorize(Role.OWNER, Role.ADMIN),
+  authorize(Role.OWNER, Role.ADMIN, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: businessHoursParamsSchema }),
   businessHoursController.deleteBusinessHours,
 );

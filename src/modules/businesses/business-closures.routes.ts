@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { Role } from '../../generated/prisma/enums';
+import { restrictBusinessOwnerToOwnBusiness } from '../../shared/business-scope';
 import { businessIdParamSchema } from './businesses.dto';
 import * as closuresController from './business-closures.controller';
 import {
@@ -16,21 +17,24 @@ businessClosuresRouter.use(validate({ params: businessIdParamSchema }));
 
 businessClosuresRouter.get(
   '/',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ query: listClosuresQuerySchema }),
   closuresController.listClosures,
 );
 
 businessClosuresRouter.post(
   '/',
-  authorize(Role.OWNER, Role.ADMIN),
+  authorize(Role.OWNER, Role.ADMIN, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ body: createClosureSchema }),
   closuresController.createClosure,
 );
 
 businessClosuresRouter.delete(
   '/:closureId',
-  authorize(Role.OWNER, Role.ADMIN),
+  authorize(Role.OWNER, Role.ADMIN, Role.BUSINESS_OWNER),
+  restrictBusinessOwnerToOwnBusiness,
   validate({ params: closureParamsSchema }),
   closuresController.deleteClosure,
 );

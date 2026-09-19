@@ -1,4 +1,9 @@
-import { NotFoundError, BadRequestError, CartChangedError } from '../../shared/errors';
+import {
+  NotFoundError,
+  BadRequestError,
+  CartChangedError,
+  ConflictError,
+} from '../../shared/errors';
 import { decimalToNumber } from '../../shared/prisma';
 import type { PaginationMeta } from '../../shared/http';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -7,10 +12,10 @@ import * as productOffersRepository from '../businesses/product-offers.repositor
 import { resolveEffectivePrice } from '../businesses/effective-price';
 import { isBusinessOpen, type BusinessOpenReason } from '../businesses/business-status.service';
 import * as customersService from './customers.service';
-import * as customersRepository from './customers.repository';
 import * as addressesRepository from './customer-addresses.repository';
 import * as ordersService from '../orders/orders.service';
-import type { OrderDTO } from '../orders/orders.service';
+import type { OrderDTO, CreateOrderOptions } from '../orders/orders.service';
+import { createGuestAccessToken, hashGuestAccessToken } from '../guest-orders/guest-token';
 import type { CreateOrderInput } from '../orders/orders.dto';
 import type { OrderStatus } from '../../generated/prisma/enums';
 import { computeAppDeliveryFee } from '../orders/delivery-fee-calculator';
@@ -126,6 +131,8 @@ interface OrderBasics {
   customerAddress: string;
   addressReference: string | undefined;
   clientRequestId: string | undefined;
+  // Solo pedidos de invitado (ver createCheckoutOrder).
+  guestAccessTokenHash?: string;
 }
 
 // Núcleo compartido por createAppOrder (cliente ya identificado, vía /customers/:id/orders) y
@@ -143,6 +150,14 @@ async function buildAndCreateOrder(
   if (basics.clientRequestId) {
     const existing = await ordersService.getOrderByClientRequestId(basics.clientRequestId);
     if (existing) {
+      // El pedido ya existente debe ser de la MISMA identidad (misma cuenta, o ambos
+      // invitados): si no, el clientRequestId no puede usarse para leer un pedido ajeno.
+      if (existing.customerId !== basics.customerId) {
+        throw new ConflictError(
+          'Ese identificador de solicitud ya fue usado por otro pedido',
+          'IDEMPOTENCY_KEY_CONFLICT',
+        );
+      }
       return existing;
     }
   }
@@ -210,6 +225,8 @@ async function buildAndCreateOrder(
 
   const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now));
 
+  const orderOptions: CreateOrderOptions = { guestAccessTokenHash: basics.guestAccessTokenHash };
+
   return ordersService.createOrder(
     {
       customerName: basics.customerName,
@@ -223,6 +240,7 @@ async function buildAndCreateOrder(
       businesses,
     },
     undefined,
+    orderOptions,
   );
 }
 
@@ -260,22 +278,28 @@ export async function createAppOrder(
   );
 }
 
-// Checkout unificado (Fase 9): admite tanto un cliente ya identificado (customerId) como un
-// invitado (customerName+customerPhone+address directos en el body, sin cuenta previa) — no
-// bloquea el pedido por no tener un sistema de login todavía.
-export async function createCheckoutOrder(input: CheckoutOrderInput): Promise<OrderDTO> {
-  let resolvedCustomerId: string | null;
-  let customerName: string;
-  let customerPhone: string;
-  let customerAddress: string;
-  let addressReference: string | undefined;
+// Resultado de /checkout: el pedido y, SOLO si fue de invitado, el token con el que ese
+// dispositivo podrá seguirlo y valorarlo sin cuenta.
+export interface CheckoutResultDTO extends OrderDTO {
+  guestAccessToken?: string;
+}
 
-  if (input.customerId) {
-    const customer = await customersService.assertCustomerExists(input.customerId);
-    resolvedCustomerId = customer.id;
-    customerName = customer.name;
-    customerPhone = customer.phone;
+// Checkout unificado. Comprar NO exige cuenta:
+//  - con authenticatedCustomerId (sale del Bearer verificado, nunca del body) → pedido vinculado
+//    a esa cuenta; nombre/teléfono por defecto los de la cuenta.
+//  - sin él → invitado: customerId = null, se conservan como snapshot el nombre, teléfono,
+//    dirección y referencia que escribió, y se entrega un guestAccessToken.
+// Ya NO se vincula un pedido de invitado a un Customer por coincidir el teléfono: escribir un
+// número no prueba que sea tuyo, y así se colgaban pedidos en cuentas ajenas.
+export async function createCheckoutOrder(
+  input: CheckoutOrderInput,
+  authenticatedCustomerId?: string,
+): Promise<CheckoutResultDTO> {
+  if (authenticatedCustomerId) {
+    const customer = await customersService.assertCustomerExists(authenticatedCustomerId);
 
+    let customerAddress: string;
+    let addressReference: string | undefined;
     if (input.addressId) {
       const address = await addressesRepository.findByIdForCustomer(input.addressId, customer.id);
       if (!address) {
@@ -284,37 +308,63 @@ export async function createCheckoutOrder(input: CheckoutOrderInput): Promise<Or
       customerAddress = address.address;
       addressReference = address.reference ?? undefined;
     } else {
+      // El refine del DTO garantiza address si no vino addressId.
       customerAddress = input.address as string;
       addressReference = input.addressReference;
     }
-  } else {
-    // Invitado: el DTO ya garantiza que customerName/customerPhone/address vienen presentes
-    // cuando no hay customerId (no hay addressId posible: un invitado no tiene direcciones
-    // guardadas todavía).
-    customerName = input.customerName as string;
-    customerPhone = input.customerPhone as string;
-    customerAddress = input.address as string;
-    addressReference = input.addressReference;
 
-    // Asociación automática (Fase 9: "asociar posteriormente el pedido con Customer"): si el
-    // teléfono ya pertenece a un Customer registrado, el pedido queda vinculado a esa cuenta
-    // sin pedirle nada más al usuario. No se crea un Customer nuevo automáticamente — eso
-    // sigue siendo un paso explícito (POST /customers) para cuando decida registrarse.
-    const existingCustomer = await customersRepository.findByPhone(customerPhone);
-    resolvedCustomerId = existingCustomer?.id ?? null;
+    return buildAndCreateOrder(
+      {
+        customerId: customer.id,
+        customerName: input.customerName ?? customer.name,
+        customerPhone: input.customerPhone ?? customer.phone,
+        customerAddress,
+        addressReference,
+        clientRequestId: input.clientRequestId,
+      },
+      input.businesses,
+    );
   }
 
-  return buildAndCreateOrder(
+  const missing: string[] = [];
+  if (!input.customerName) missing.push('customerName');
+  if (!input.customerPhone) missing.push('customerPhone');
+  if (!input.address) missing.push('address');
+  if (missing.length > 0) {
+    throw new BadRequestError(
+      'Para pedir sin cuenta indica tu nombre, teléfono y dirección',
+      'GUEST_DATA_REQUIRED',
+      { missing },
+    );
+  }
+  if (input.addressId) {
+    throw new BadRequestError(
+      'Las direcciones guardadas requieren iniciar sesión',
+      'ADDRESS_ID_REQUIRES_LOGIN',
+    );
+  }
+
+  const guestAccessToken = createGuestAccessToken(input.clientRequestId);
+  const order = await buildAndCreateOrder(
     {
-      customerId: resolvedCustomerId,
-      customerName,
-      customerPhone,
-      customerAddress,
-      addressReference,
+      customerId: null,
+      customerName: input.customerName as string,
+      customerPhone: input.customerPhone as string,
+      customerAddress: input.address as string,
+      addressReference: input.addressReference,
       clientRequestId: input.clientRequestId,
+      guestAccessTokenHash: hashGuestAccessToken(guestAccessToken),
     },
     input.businesses,
   );
+
+  // El token se entrega solo si es el de ESTE pedido: en un reintento idempotente
+  // (mismo clientRequestId) coincide con el guardado y se devuelve el mismo; un pedido
+  // anterior a este mecanismo (sin hash) no recibe un token que no abriría nada.
+  const storedHash = await ordersService.getGuestAccessTokenHash(order.id);
+  return storedHash === hashGuestAccessToken(guestAccessToken)
+    ? { ...order, guestAccessToken }
+    : order;
 }
 
 export async function listCustomerOrders(
@@ -331,10 +381,34 @@ export async function listCustomerOrders(
 
 // Fase 17: versión liviana de GET /customers/:id/orders/:orderId pensada para polling desde
 // la app — solo lo mínimo para actualizar un estado en pantalla, no el pedido completo.
+// Aditivo (reseñas/seguimiento): marcas de tiempo de cada transición y el nombre del mensajero
+// (el nombre del User; no hay foto ni otros datos). El id del mensajero no se expone.
 export interface OrderStatusDTO {
   orderNumber: number;
   status: OrderStatus;
   updatedAt: Date;
+  assignedAt: Date | null;
+  completedAt: Date | null;
+  cancelledAt: Date | null;
+  delivererName: string | null;
+}
+
+export function toOrderStatusDTO(order: OrderDTO): OrderStatusDTO {
+  return {
+    orderNumber: order.orderNumber,
+    status: order.status,
+    updatedAt: order.updatedAt,
+    assignedAt: order.assignedAt,
+    completedAt: order.completedAt,
+    cancelledAt: order.cancelledAt,
+    delivererName: order.delivererName,
+  };
+}
+
+// Detalle de UN pedido propio (scopeCustomerId de getOrderById impide leer el de otro cliente).
+export async function getCustomerOrder(customerId: string, orderId: string): Promise<OrderDTO> {
+  await customersService.assertCustomerExists(customerId);
+  return ordersService.getOrderById(orderId, undefined, customerId);
 }
 
 export async function getCustomerOrderStatus(
@@ -345,7 +419,7 @@ export async function getCustomerOrderStatus(
   // scopeCustomerId adentro de getOrderById ya garantiza que no se pueda leer un pedido de
   // otro cliente (tira ForbiddenError si no coincide).
   const order = await ordersService.getOrderById(orderId, undefined, customerId);
-  return { orderNumber: order.orderNumber, status: order.status, updatedAt: order.updatedAt };
+  return toOrderStatusDTO(order);
 }
 
 // Fase 18: reconstruye el carrito de un pedido anterior contra el estado ACTUAL del catálogo

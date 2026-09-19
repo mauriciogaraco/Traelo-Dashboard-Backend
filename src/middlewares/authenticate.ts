@@ -28,7 +28,14 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
   const token = header.slice('Bearer '.length);
 
   try {
-    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload;
+    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload & {
+      typ?: string;
+    };
+    // Los tokens de cliente se firman con el mismo secreto: sin este chequeo, un cliente
+    // podría usar su token en rutas del dashboard. Un token de staff nunca lleva `typ`.
+    if (payload.typ !== undefined || !payload.role) {
+      throw new Error('Token no es de staff');
+    }
     req.user = { sub: payload.sub, role: payload.role };
     next();
   } catch {

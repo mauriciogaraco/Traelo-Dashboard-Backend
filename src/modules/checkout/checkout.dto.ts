@@ -1,40 +1,38 @@
 import { z } from 'zod';
+import { isValidPhone, normalizePhone } from '../../shared/phone';
 import { appOrderBusinessSchema } from '../customers/customer-orders.dto';
 
 export type AppOrderBusinessInput = z.infer<typeof appOrderBusinessSchema>;
 
-// Checkout unificado (Fase 9 del checklist de la app): admite un cliente ya identificado
-// (customerId) o un invitado sin cuenta previa (customerName+customerPhone+address directos).
-// A propósito NO acepta unitPrice/deliveryFee/platformFeeOverride — igual que
-// customer-orders.dto.ts, todo eso se resuelve en el servidor.
+// Checkout unificado. NO exige cuenta: sin Authorization es un pedido de invitado; con un
+// Bearer de cliente válido el pedido se vincula a esa cuenta. La identidad sale SIEMPRE del
+// token — este body no acepta customerId (si llega, se ignora) — y tampoco
+// unitPrice/deliveryFee/platformFeeOverride: todo eso lo resuelve el servidor.
+//
+// Qué campos hacen falta depende de quién llama, y eso lo decide el service:
+//  - invitado: customerName + customerPhone + address (addressId no aplica: no tiene direcciones);
+//  - cliente autenticado: addressId o address; nombre/teléfono opcionales (por defecto, los de
+//    su cuenta).
+// customerPhone se conserva tal cual lo escribió la persona (snapshot del pedido), pero debe
+// tener forma de teléfono.
 export const checkoutOrderSchema = z
   .object({
-    customerId: z.cuid('id de cliente inválido').optional(),
-    customerName: z.string().min(2).max(150).optional(),
-    customerPhone: z.string().min(6).max(30).optional(),
+    customerName: z.string().trim().min(2).max(150).optional(),
+    customerPhone: z
+      .string()
+      .min(6)
+      .max(30)
+      .refine((value) => isValidPhone(normalizePhone(value)), { message: 'Teléfono inválido' })
+      .optional(),
     addressId: z.cuid('id de dirección inválido').optional(),
-    address: z.string().min(3).max(300).optional(),
+    address: z.string().trim().min(3).max(300).optional(),
     addressReference: z.string().max(200).optional(),
     clientRequestId: z.string().min(8).max(100).optional(),
     businesses: z.array(appOrderBusinessSchema).min(1),
   })
-  .refine(
-    (data) =>
-      data.customerId !== undefined ||
-      (data.customerName !== undefined && data.customerPhone !== undefined),
-    {
-      message: 'Debe indicar customerId, o customerName y customerPhone para un pedido de invitado',
-      path: ['customerId'],
-    },
-  )
   .refine((data) => data.addressId !== undefined || data.address !== undefined, {
     message: 'Debe indicar addressId (una dirección guardada) o address (una nueva)',
     path: ['address'],
-  })
-  .refine((data) => data.customerId !== undefined || data.addressId === undefined, {
-    message:
-      'addressId solo es válido junto con customerId — un invitado no tiene direcciones guardadas todavía',
-    path: ['addressId'],
   });
 
 export type CheckoutOrderInput = z.infer<typeof checkoutOrderSchema>;

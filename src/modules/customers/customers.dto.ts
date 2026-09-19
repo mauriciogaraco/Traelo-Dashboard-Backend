@@ -6,17 +6,11 @@ export const customerIdParamSchema = z.object({
 
 export type CustomerIdParam = z.infer<typeof customerIdParamSchema>;
 
-export const createCustomerSchema = z.object({
-  name: z.string().min(2).max(150),
-  phone: z.string().min(6).max(30),
-  email: z.email().optional(),
-});
-
-export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
-
-// El teléfono no se puede cambiar acá: es el identificador principal del cliente y todavía
-// no hay flujo de verificación (OTP) para reasignarlo con seguridad — eso queda para cuando
-// se diseñe la autenticación de Customer.
+// El alta de clientes vive en /auth/customer/register (con contraseña). Ya no existe
+// POST /customers: crear un cliente solo con un teléfono permitía ocupar números ajenos.
+//
+// El teléfono no se puede cambiar acá: es el identificador de la cuenta y todavía no hay
+// verificación (OTP) para reasignarlo con seguridad.
 export const updateCustomerSchema = z.object({
   name: z.string().min(2).max(150).optional(),
   email: z.email().optional(),
