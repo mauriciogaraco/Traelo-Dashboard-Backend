@@ -138,6 +138,7 @@ export async function listProducts(
     ...(query.lowStock !== undefined ? { lowStock: query.lowStock } : {}),
     ...(query.category ? { category: query.category } : {}),
     ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+    ...(query.search ? { name: { contains: query.search, mode: 'insensitive' as const } } : {}),
   };
 
   const { skip, take } = toSkipTake(query);

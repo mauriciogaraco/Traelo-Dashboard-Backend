@@ -18,6 +18,13 @@ export const listProductsQuerySchema = paginationQuerySchema.extend({
   lowStock: booleanQueryParam.optional(),
   category: z.string().min(1).max(80).optional(),
   categoryId: z.cuid('id de categoría inválido').optional(),
+  // Búsqueda por nombre (contiene, sin distinguir mayúsculas). Vacío = sin filtro.
+  search: z
+    .string()
+    .trim()
+    .max(120)
+    .optional()
+    .transform((value) => value || undefined),
 });
 
 export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
