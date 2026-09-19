@@ -411,7 +411,7 @@ model Product {
   // Opciones de empaque/envase entre las que el cliente elige al comprar (ej. Termopack, Caja,
   // Jaba): [{ name, price, capacity? }]. null = el producto no lleva empaque. `price` es el costo
   // del empaque en CUP; `capacity`, si existe, son las unidades que caben en un empaque (sin ella
-  // se cobra un empaque por unidad). Se valida con packagingOptionSchema (products.dto).
+  // se cobra un empaque por unidad). Se valida con packagingSchema (businesses/packaging.ts).
   packaging     Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

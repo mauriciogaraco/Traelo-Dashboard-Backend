@@ -62,7 +62,7 @@ export function parsePackaging(value: unknown): PackagingOption[] | null {
 // Escritura: undefined = no tocar la columna; null o lista vacía = quitar el empaque (NULL en SQL).
 export function packagingToDb(
   value: PackagingOption[] | null | undefined,
-): Prisma.InputJsonValue | Prisma.NullTypes.DbNull | undefined {
+): Prisma.InputJsonValue | typeof Prisma.DbNull | undefined {
   if (value === undefined) return undefined;
   return value === null || value.length === 0 ? Prisma.DbNull : value;
 }
