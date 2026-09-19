@@ -29,6 +29,7 @@ export interface BusinessDTO {
   defaultProductCommissionAmount: number | null;
   deliveryFeeBase: number;
   logoUrl: string | null;
+  logoBlurhash: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -50,6 +51,7 @@ interface BusinessRecord {
   defaultProductCommissionAmount: Prisma.Decimal | null;
   deliveryFeeBase: Prisma.Decimal;
   logoUrl: string | null;
+  logoBlurhash: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,6 +70,7 @@ function toDTO(business: BusinessRecord): BusinessDTO {
     defaultProductCommissionAmount: decimalToNumber(business.defaultProductCommissionAmount),
     deliveryFeeBase: decimalToNumber(business.deliveryFeeBase),
     logoUrl: business.logoUrl,
+    logoBlurhash: business.logoBlurhash,
     createdAt: business.createdAt,
     updatedAt: business.updatedAt,
   };
@@ -151,7 +154,12 @@ export async function updateBusiness(id: string, input: UpdateBusinessInput): Pr
     );
   }
 
-  const business = await businessesRepository.update(id, input);
+  // Un logoUrl puesto a mano no tiene blurhash calculado: se limpia el anterior para que la app
+  // no muestre el placeholder de otra imagen.
+  const business = await businessesRepository.update(id, {
+    ...input,
+    ...(input.logoUrl !== undefined ? { logoBlurhash: null } : {}),
+  });
   await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
   return toDTO(business);
 }
@@ -180,7 +188,10 @@ export async function setAcceptingOrders(
 export async function setBusinessLogo(id: string, fileBuffer: Buffer): Promise<BusinessDTO> {
   await assertBusinessExists(id);
   const uploaded = await uploadImage(fileBuffer, `traelo/businesses/${id}`);
-  const business = await businessesRepository.update(id, { logoUrl: uploaded.url });
+  const business = await businessesRepository.update(id, {
+    logoUrl: uploaded.url,
+    logoBlurhash: uploaded.blurhash,
+  });
   await bumpCatalogVersion(CatalogEntityType.BUSINESS, business.id, CatalogChangeType.UPSERT);
   return toDTO(business);
 }

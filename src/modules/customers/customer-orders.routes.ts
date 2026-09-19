@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../../middlewares/validate';
 import { customerIdParamSchema } from './customers.dto';
+import { orderReviewsRouter } from '../reviews/reviews.routes';
 import * as customerOrdersController from './customer-orders.controller';
 import {
   createAppOrderSchema,
@@ -25,6 +26,12 @@ customerOrdersRouter.post(
 );
 
 customerOrdersRouter.get(
+  '/:orderId',
+  validate({ params: customerOrderParamsSchema }),
+  customerOrdersController.getOrder,
+);
+
+customerOrdersRouter.get(
   '/:orderId/status',
   validate({ params: customerOrderParamsSchema }),
   customerOrdersController.getOrderStatus,
@@ -34,4 +41,10 @@ customerOrdersRouter.post(
   '/:orderId/repeat',
   validate({ params: customerOrderParamsSchema }),
   customerOrdersController.repeatOrder,
+);
+
+customerOrdersRouter.use(
+  '/:orderId/reviews',
+  validate({ params: customerOrderParamsSchema }),
+  orderReviewsRouter,
 );

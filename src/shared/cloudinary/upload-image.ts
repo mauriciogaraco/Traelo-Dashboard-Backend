@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import { v2 as cloudinary } from 'cloudinary';
 import { env } from '../../config/env';
+import { encodeBlurhash } from '../blurhash';
 import { BadRequestError } from '../errors';
 
 let configured = false;
@@ -21,6 +22,8 @@ function ensureConfigured(): void {
 export interface UploadedImage {
   url: string;
   publicId: string;
+  // null si la imagen no se pudo decodificar para calcularlo (ver encodeBlurhash).
+  blurhash: string | null;
 }
 
 // Sube un archivo ya validado (ver middlewares/imageUpload.ts: tipo y tamaño) a Cloudinary,
@@ -35,6 +38,17 @@ export async function uploadImage(buffer: Buffer, folder: string): Promise<Uploa
   }
   ensureConfigured();
 
+  const [blurhash, uploaded] = await Promise.all([
+    encodeBlurhash(buffer),
+    uploadToCloudinary(buffer, folder),
+  ]);
+  return { ...uploaded, blurhash };
+}
+
+function uploadToCloudinary(
+  buffer: Buffer,
+  folder: string,
+): Promise<{ url: string; publicId: string }> {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       { folder, resource_type: 'image' },

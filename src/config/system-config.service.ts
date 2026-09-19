@@ -8,6 +8,10 @@ export interface SystemConfigDTO {
   defaultDelivererCommissionPercentage: number;
   rafflePromoText: string | null;
   raffleVideoUrl: string | null;
+  /** Puntos V1: puntos = floor(Servicio Tráelo / pointsServiceDivisor). */
+  pointsServiceDivisor: number;
+  /** Solo cuentan los pedidos completados desde esta fecha. */
+  pointsEnabledFrom: Date;
   updatedAt: Date;
 }
 
@@ -15,6 +19,8 @@ function toDTO(config: {
   defaultDelivererCommissionPercentage: Prisma.Decimal;
   rafflePromoText: string | null;
   raffleVideoUrl: string | null;
+  pointsServiceDivisor: number;
+  pointsEnabledFrom: Date;
   updatedAt: Date;
 }): SystemConfigDTO {
   return {
@@ -23,6 +29,8 @@ function toDTO(config: {
     ),
     rafflePromoText: config.rafflePromoText,
     raffleVideoUrl: config.raffleVideoUrl,
+    pointsServiceDivisor: config.pointsServiceDivisor,
+    pointsEnabledFrom: config.pointsEnabledFrom,
     updatedAt: config.updatedAt,
   };
 }
@@ -44,12 +52,14 @@ export async function updateSystemConfig(input: UpdateSystemConfigInput): Promis
       defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage,
       rafflePromoText: input.rafflePromoText,
       raffleVideoUrl: input.raffleVideoUrl,
+      pointsServiceDivisor: input.pointsServiceDivisor,
     },
     create: {
       id: SINGLETON_ID,
       defaultDelivererCommissionPercentage: input.defaultDelivererCommissionPercentage ?? 60,
       rafflePromoText: input.rafflePromoText,
       raffleVideoUrl: input.raffleVideoUrl,
+      pointsServiceDivisor: input.pointsServiceDivisor ?? 10,
     },
   });
 

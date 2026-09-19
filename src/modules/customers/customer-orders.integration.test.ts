@@ -76,9 +76,12 @@ describe('creación de pedidos desde la app (integración)', () => {
       available: false,
     });
 
-    const customer = await customersService.createCustomer({
-      name: 'Cliente Integration Test',
-      phone: `+53 555 ${Date.now()}`.slice(0, 20),
+    // POST /customers ya no existe: el cliente de prueba se crea directo en la BD.
+    const customer = await prisma.customer.create({
+      data: {
+        name: 'Cliente Integration Test',
+        phone: `+53555${Date.now()}`.slice(0, 20),
+      },
     });
     customerId = customer.id;
 
@@ -309,13 +312,19 @@ describe('creación de pedidos desde la app (integración)', () => {
       orderNumber: order.orderNumber,
       status: 'PENDING',
       updatedAt: order.updatedAt,
+      assignedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      delivererName: null,
     });
   });
 
   it('getCustomerOrderStatus rechaza consultar un pedido de otro cliente', async () => {
-    const otherCustomer = await customersService.createCustomer({
-      name: 'Otro Cliente',
-      phone: `+53 555 other-${Date.now()}`.slice(0, 20),
+    const otherCustomer = await prisma.customer.create({
+      data: {
+        name: 'Otro Cliente',
+        phone: `+53556${Date.now()}`.slice(0, 20),
+      },
     });
 
     const order = await customerOrdersService.createAppOrder(customerId, {

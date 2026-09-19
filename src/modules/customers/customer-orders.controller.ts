@@ -23,6 +23,12 @@ export async function listOrders(req: Request, res: Response): Promise<void> {
   sendPaginated(res, data, meta);
 }
 
+export async function getOrder(req: Request, res: Response): Promise<void> {
+  const { id: customerId, orderId } = req.params as unknown as CustomerOrderParams;
+  const order = await customerOrdersService.getCustomerOrder(customerId, orderId);
+  sendOk(res, order);
+}
+
 export async function getOrderStatus(req: Request, res: Response): Promise<void> {
   const { id: customerId, orderId } = req.params as unknown as CustomerOrderParams;
   const status = await customerOrdersService.getCustomerOrderStatus(customerId, orderId);

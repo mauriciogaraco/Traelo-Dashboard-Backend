@@ -1,12 +1,7 @@
 import type { Request, Response } from 'express';
-import { sendCreated, sendOk } from '../../shared/http';
+import { sendOk } from '../../shared/http';
 import * as customersService from './customers.service';
-import type { CreateCustomerInput, CustomerIdParam, UpdateCustomerInput } from './customers.dto';
-
-export async function createCustomer(req: Request, res: Response): Promise<void> {
-  const customer = await customersService.createCustomer(req.body as CreateCustomerInput);
-  sendCreated(res, customer);
-}
+import type { CustomerIdParam, UpdateCustomerInput } from './customers.dto';
 
 export async function getCustomer(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as CustomerIdParam;

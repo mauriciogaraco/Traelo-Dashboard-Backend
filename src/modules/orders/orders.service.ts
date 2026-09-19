@@ -12,6 +12,7 @@ import * as commissionCalculator from '../businesses/commission-calculator';
 import * as systemConfigService from '../../config/system-config.service';
 import * as customersService from '../customers/customers.service';
 import * as customersRepository from '../customers/customers.repository';
+import * as pointsService from '../loyalty/points.service';
 import * as ordersRepository from './orders.repository';
 import type { OrderWithRelations } from './orders.repository';
 import * as calc from './orders.calculations';
@@ -178,6 +179,19 @@ export async function getOrderByClientRequestId(clientRequestId: string): Promis
   return order ? toDTO(order) : null;
 }
 
+// Hash del token de acceso de invitado de un pedido (null si no es un pedido de invitado).
+// El hash nunca sale en OrderDTO: solo se compara dentro del backend.
+export async function getGuestAccessTokenHash(orderId: string): Promise<string | null> {
+  const order = await ordersRepository.findById(orderId);
+  return order?.guestAccessTokenHash ?? null;
+}
+
+// Pedido de invitado a partir del hash de su token (autorización por posesión del token).
+export async function findOrderByGuestAccessTokenHash(hash: string): Promise<OrderDTO | null> {
+  const order = await ordersRepository.findByGuestAccessTokenHash(hash);
+  return order ? toDTO(order) : null;
+}
+
 async function resolveEffectivePercentage(deliverer: {
   commissionPercentage: Prisma.Decimal | null;
 }): Promise<number> {
@@ -279,9 +293,17 @@ function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
   }));
 }
 
+export interface CreateOrderOptions {
+  // Solo pedidos de invitado hechos por /checkout: hash SHA-256 del token que se le entrega al
+  // dispositivo para seguir el pedido sin cuenta. No forma parte de CreateOrderInput a
+  // propósito: el dashboard (POST /orders) nunca debe poder fijarlo.
+  guestAccessTokenHash?: string;
+}
+
 export async function createOrder(
   input: CreateOrderInput,
   registeredByUserId?: string,
+  options: CreateOrderOptions = {},
 ): Promise<OrderDTO> {
   // Idempotencia (Fase 13): si ya existe un pedido con este clientRequestId, la request es un
   // reintento (mala conexión, timeout, doble tap) — se devuelve el pedido ya creado en vez de
@@ -345,6 +367,7 @@ export async function createOrder(
       delivererEarning: new Prisma.Decimal(0),
       source: input.source ?? 'MANUAL',
       clientRequestId: input.clientRequestId,
+      guestAccessTokenHash: options.guestAccessTokenHash,
       raffleNumber: input.raffleNumber,
       ...(registeredByUserId ? { registeredBy: { connect: { id: registeredByUserId } } } : {}),
       ...(input.customerId ? { customer: { connect: { id: input.customerId } } } : {}),
@@ -545,6 +568,12 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   }
 
   const order = await ordersRepository.update(id, data);
+
+  // Un pedido COMPLETED corregido en montos puede cambiar sus puntos: se suman o se retiran
+  // (con aviso al cliente). Cambios que no tocan el Servicio Tráelo no mueven nada.
+  if (existing.status === 'COMPLETED' && financialFieldsChanged) {
+    await pointsService.syncOrderPointsSafely(id);
+  }
   return toDTO(order);
 }
 
@@ -622,6 +651,8 @@ export async function updateOrderStatus(
       status: 'COMPLETED',
       completedAt: new Date(),
     });
+    // Los puntos se acreditan SOLO al completar (nunca al crear ni al cancelar).
+    await pointsService.syncOrderPointsSafely(id);
     return toDTO(order);
   }
 
@@ -659,6 +690,7 @@ export async function bulkCompleteOrders(ids: string[]): Promise<BulkCompleteOrd
       status: 'COMPLETED',
       completedAt: new Date(),
     });
+    await pointsService.syncOrderPointsSafely(id);
     completed.push(toDTO(order));
   }
 

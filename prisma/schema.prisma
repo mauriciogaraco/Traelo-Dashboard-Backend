@@ -15,6 +15,9 @@ enum Role {
   ADMIN
   EMPLOYEE
   DELIVERER
+  // Dueño/a de un negocio (no de Tráelo): accede solo a los datos de SU negocio, ligado por
+  // User.businessId. Nunca ve ganancias de Tráelo (platformFee, comisión, reparto de mensajería).
+  BUSINESS_OWNER
 }
 
 enum CommissionType {
@@ -90,15 +93,19 @@ enum CatalogChangeType {
 // ── Auth / Usuarios ──────────────────────────────────────
 
 model User {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   name         String
-  email        String   @unique
+  email        String    @unique
   passwordHash String
   phone        String?
   role         Role
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  active       Boolean   @default(true)
+  // Solo se llena cuando role = BUSINESS_OWNER: el único negocio que esta cuenta administra.
+  // Varias cuentas pueden apuntar al mismo negocio (dueño + socio).
+  businessId   String?
+  business     Business? @relation(fields: [businessId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   deliverer         Deliverer?
   refreshTokens     RefreshToken[]
@@ -107,6 +114,7 @@ model User {
   closedSettlements Settlement[]         @relation("SettlementClosedBy")
 
   @@index([role])
+  @@index([businessId])
   @@map("users")
 }
 
@@ -152,6 +160,7 @@ model Deliverer {
 
   assignedOrders Order[]      @relation("OrderDeliverer")
   settlements    Settlement[]
+  reviews        DelivererReview[]
 
   @@map("deliverers")
 }
@@ -159,26 +168,73 @@ model Deliverer {
 // ── Clientes (app móvil) ──────────────────────────────────
 // Independiente de `User`: User es exclusivamente el usuario interno del dashboard
 // (OWNER/ADMIN/EMPLOYEE/DELIVERER). Customer es quien compra desde la app/web.
-// Todavía sin passwordHash: la app usará un flujo propio (teléfono/OTP) que se
-// diseñará en otra tarea. El teléfono es el identificador principal del cliente.
+// Cuenta OPCIONAL: comprar nunca exige tener un Customer (los pedidos de invitado tienen
+// Order.customerId = null y conservan sus snapshots). El teléfono es el identificador
+// principal; passwordHash es null mientras no haya una cuenta con contraseña.
 
 model Customer {
-  id          String    @id @default(cuid())
-  name        String
-  phone       String    @unique
-  email       String?
-  active      Boolean   @default(true)
-  lastOrderAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  name          String
+  phone         String    @unique
+  email         String?
+  // null = sin credenciales (registro heredado o cuenta aún sin contraseña).
+  passwordHash  String?
+  // Reservados para una futura verificación por OTP/enlace. Hoy NUNCA se ponen en true: no hay
+  // canal de SMS/email aprobado, y escribir un teléfono no lo verifica.
+  phoneVerified Boolean   @default(false)
+  emailVerified Boolean   @default(false)
+  // Saldo de puntos de fidelización = suma de sus PointsTransaction (se mantiene en la misma
+  // transacción que cada movimiento). Entero, nunca decimal.
+  pointsBalance Int       @default(0)
+  active        Boolean   @default(true)
+  lastOrderAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   addresses          CustomerAddress[]
   devices            CustomerDevice[]
   orders             Order[]
   favoriteBusinesses CustomerFavoriteBusiness[]
   favoriteProducts   CustomerFavoriteProduct[]
+  refreshTokens      CustomerRefreshToken[]
+  passwordResets     CustomerPasswordResetToken[]
+  pointsTransactions PointsTransaction[]
+  delivererReviews   DelivererReview[]
+  businessReviews    BusinessReview[]
 
   @@map("customers")
+}
+
+// Sesión persistente del cliente. Tablas propias (no se reutilizan las de User): un cliente
+// nunca comparte espacio de tokens con el personal interno.
+model CustomerRefreshToken {
+  id                  String    @id @default(cuid())
+  customerId          String
+  customer            Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tokenHash           String    @unique
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  replacedByTokenHash String?
+  userAgent           String?
+  ipAddress           String?
+  createdAt           DateTime  @default(now())
+
+  @@index([customerId])
+  @@map("customer_refresh_tokens")
+}
+
+// Recuperación de contraseña: solo se guarda el hash, expira y es de un solo uso.
+model CustomerPasswordResetToken {
+  id         String    @id @default(cuid())
+  customerId String
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([customerId])
+  @@map("customer_password_reset_tokens")
 }
 
 model CustomerAddress {
@@ -264,6 +320,9 @@ model Business {
   deliveryFeeBase                Decimal        @default(250) @db.Decimal(10, 2)
   // Fase 22: mismo criterio que Product.imageUrl — solo la URL, versionada al servirla.
   logoUrl                        String?
+  // Blurhash del logo (ver shared/blurhash): la app lo muestra como placeholder mientras carga la
+  // imagen real. Se calcula al subir la imagen; si logoUrl se edita a mano queda en null.
+  logoBlurhash                   String?
   createdAt                      DateTime       @default(now())
   updatedAt                      DateTime       @updatedAt
 
@@ -275,6 +334,8 @@ model Business {
   businessHours       BusinessHours[]
   closures            BusinessClosure[]
   favoritedBy         CustomerFavoriteBusiness[]
+  ownerUsers          User[]
+  reviews             BusinessReview[]
 
   @@index([active, acceptingOrders])
   @@map("businesses")
@@ -345,11 +406,13 @@ model Product {
   // de versión (?v=updatedAt) para que un cambio de imagen invalide el cache del móvil sin
   // depender de que la URL en sí cambie.
   imageUrl    String?
+  // Mismo criterio que Business.logoBlurhash.
+  imageBlurhash String?
   // Opciones de empaque/envase entre las que el cliente elige al comprar (ej. Termopack, Caja,
   // Jaba): [{ name, price, capacity? }]. null = el producto no lleva empaque. `price` es el costo
   // del empaque en CUP; `capacity`, si existe, son las unidades que caben en un empaque (sin ella
   // se cobra un empaque por unidad). Se valida con packagingSchema (businesses/packaging.ts).
-  packaging   Json?
+  packaging     Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -486,6 +549,12 @@ model Order {
   // vez de duplicarlo. Nullable/único: los pedidos manuales del dashboard nunca lo usan.
   clientRequestId String? @unique
 
+  // Pedidos de invitado (customerId = null): hash SHA-256 de un token aleatorio que se entrega
+  // UNA sola vez, al crear el pedido, al dispositivo que lo hizo. Con él el invitado puede ver
+  // el estado y valorar sin cuenta, sin depender de que "coincida el teléfono". Null en pedidos
+  // de cliente autenticado y en los manuales.
+  guestAccessTokenHash String? @unique
+
   delivererId String?
   deliverer   Deliverer? @relation("OrderDeliverer", fields: [delivererId], references: [id])
 
@@ -509,6 +578,12 @@ model Order {
 
   businesses      OrderBusiness[]
   settlementLines SettlementOrderLine[]
+
+  // Reseñas del cliente sobre este pedido (ver DelivererReview / BusinessReview).
+  delivererReview DelivererReview?
+  businessReviews BusinessReview[]
+
+  pointsTransactions PointsTransaction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -538,9 +613,95 @@ model OrderBusiness {
 
   items OrderItem[]
 
+  // A lo sumo una reseña por (pedido, negocio) — ver BusinessReview.
+  review BusinessReview?
+
   @@unique([orderId, businessId])
   @@index([businessId])
   @@map("order_businesses")
+}
+
+// ── Puntos de fidelización (V1) ──────────────────────────
+// Libro mayor INMUTABLE: nunca se edita ni se borra una fila; las correcciones son movimientos
+// nuevos (ORDER_ADJUSTMENT, firmados). Cada fila guarda la regla y el monto usados para poder
+// auditar por qué se dio o se retiró cada punto.
+
+enum PointsTransactionType {
+  ORDER_COMPLETED
+  ORDER_ADJUSTMENT
+}
+
+model PointsTransaction {
+  id           String                @id @default(cuid())
+  customerId   String
+  customer     Customer              @relation(fields: [customerId], references: [id])
+  type         PointsTransactionType
+  // Firmado y distinto de cero: positivo acredita, negativo retira.
+  points       Int
+  balanceAfter Int
+  orderId      String?
+  order        Order?                @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  // Snapshots: sobreviven aunque el pedido cambie después.
+  orderNumber  Int?
+  serviceFee   Decimal               @db.Decimal(10, 2)
+  divisor      Int
+  reason       String
+  // Idempotencia del crédito inicial de un pedido ("order-earn:<orderId>"): imposible duplicarlo.
+  dedupeKey    String?               @unique
+  createdAt    DateTime              @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([orderId])
+  @@map("points_transactions")
+}
+
+// ── Reseñas ──────────────────────────────────────────────
+// El pedido es la referencia histórica: no existe una reseña "global" de un negocio o de un
+// mensajero, siempre nace de un pedido COMPLETED concreto. Dos modelos separados (en vez de
+// uno genérico con targetType) para que las claves foráneas sean reales, la restricción
+// anti-duplicado sea un @@unique simple y el promedio sea un aggregate directo.
+//
+// rating: Decimal(2,1) → 1.0 a 5.0 con un decimal (paso 0.1). El rango se refuerza además con
+// un CHECK en la migración (Prisma no modela CHECK) y con validación zod en el API.
+// customerId es null cuando el pedido fue de un invitado (se autoriza con guestAccessToken).
+
+model DelivererReview {
+  id          String    @id @default(cuid())
+  // @unique: un pedido tiene un solo mensajero, así que una sola reseña de mensajero.
+  orderId     String    @unique
+  order       Order     @relation(fields: [orderId], references: [id])
+  delivererId String
+  deliverer   Deliverer @relation(fields: [delivererId], references: [id])
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  rating      Decimal   @db.Decimal(2, 1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([delivererId])
+  @@index([customerId])
+  @@map("deliverer_reviews")
+}
+
+model BusinessReview {
+  id         String @id @default(cuid())
+  orderId    String
+  businessId String
+  // FK compuesta a OrderBusiness: la base de datos garantiza que el negocio valorado
+  // realmente forma parte de ese pedido.
+  orderBusiness OrderBusiness @relation(fields: [orderId, businessId], references: [orderId, businessId])
+  order         Order         @relation(fields: [orderId], references: [id])
+  business      Business      @relation(fields: [businessId], references: [id])
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  rating        Decimal       @db.Decimal(2, 1)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([orderId, businessId])
+  @@index([businessId])
+  @@index([customerId])
+  @@map("business_reviews")
 }
 
 model OrderItem {
@@ -605,14 +766,19 @@ model SettlementOrderLine {
 // ── Config global ────────────────────────────────────────
 
 model SystemConfig {
-  id                                   String   @id @default("singleton")
-  defaultDelivererCommissionPercentage Decimal  @default(60) @db.Decimal(5, 2)
+  id                                   String  @id @default("singleton")
+  defaultDelivererCommissionPercentage Decimal @default(60) @db.Decimal(5, 2)
 
   // Bloque promocional opcional que se agrega al final del vale generado (p.ej. campaña de
   // sorteo). rafflePromoText vacío/null = no agregar nada al vale, sin necesidad de un flag
   // "activo" aparte.
   rafflePromoText String?
   raffleVideoUrl  String?
+
+  // Puntos V1: puntos = floor(Servicio Tráelo / pointsServiceDivisor). Solo cuentan los pedidos
+  // completados desde pointsEnabledFrom (los anteriores no generan ni ajustan puntos).
+  pointsServiceDivisor Int      @default(10)
+  pointsEnabledFrom    DateTime @default(now())
 
   updatedAt DateTime @updatedAt
 

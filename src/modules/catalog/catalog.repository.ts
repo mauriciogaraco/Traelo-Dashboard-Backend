@@ -22,6 +22,7 @@ const catalogBusinessSelect = {
   address: true,
   acceptingOrders: true,
   logoUrl: true,
+  logoBlurhash: true,
   updatedAt: true,
   businessHours: { orderBy: { dayOfWeek: 'asc' as const } },
 } satisfies Prisma.BusinessSelect;

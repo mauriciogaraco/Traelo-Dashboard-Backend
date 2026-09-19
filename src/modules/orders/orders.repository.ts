@@ -22,6 +22,10 @@ export function findById(id: string) {
   return prisma.order.findUnique({ where: { id }, include: orderInclude });
 }
 
+export function findByGuestAccessTokenHash(guestAccessTokenHash: string) {
+  return prisma.order.findUnique({ where: { guestAccessTokenHash }, include: orderInclude });
+}
+
 export function findByClientRequestId(clientRequestId: string) {
   return prisma.order.findUnique({ where: { clientRequestId }, include: orderInclude });
 }
