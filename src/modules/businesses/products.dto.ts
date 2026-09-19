@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { booleanQueryParam, paginationQuerySchema } from '../../shared/http';
+import { packagingSchema } from './packaging';
 
 export const productParamsSchema = z.object({
   id: z.cuid('id de negocio inválido'),
@@ -32,6 +33,8 @@ export const createProductSchema = z.object({
   externalId: z.string().min(1).max(80).optional(),
   // Fase 22: solo la URL (a donde sea que esté alojada la imagen), nunca el binario.
   imageUrl: z.url('URL de imagen inválida').optional(),
+  // Opciones de empaque entre las que elige el cliente (ver packaging.ts). Vacío/omitido = sin empaque.
+  packaging: packagingSchema.optional(),
 });
 
 export type CreateProductInput = z.infer<typeof createProductSchema>;
@@ -44,6 +47,8 @@ export const updateProductSchema = z.object({
   price: z.coerce.number().min(0).optional(),
   active: z.boolean().optional(),
   imageUrl: z.url('URL de imagen inválida').nullable().optional(),
+  // null o [] quitan el empaque; omitido no lo toca.
+  packaging: packagingSchema.nullable().optional(),
 });
 
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;

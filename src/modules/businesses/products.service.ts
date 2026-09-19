@@ -8,6 +8,7 @@ import type { Prisma } from '../../generated/prisma/client';
 import * as businessesRepository from './businesses.repository';
 import * as productsRepository from './products.repository';
 import * as categoriesService from '../categories/categories.service';
+import { packagingToDb, parsePackaging, type PackagingOption } from './packaging';
 import type {
   CreateProductInput,
   ListProductsQuery,
@@ -33,6 +34,7 @@ export interface ProductDTO {
   lowStock: boolean;
   externalId: string | null;
   imageUrl: string | null;
+  packaging: PackagingOption[] | null;
   commission: ProductCommissionDTO | null;
   createdAt: Date;
   updatedAt: Date;
@@ -51,6 +53,7 @@ interface ProductRecord {
   lowStock: boolean;
   externalId: string | null;
   imageUrl: string | null;
+  packaging: Prisma.JsonValue | null;
   commission: { commissionAmount: Prisma.Decimal } | null;
   createdAt: Date;
   updatedAt: Date;
@@ -70,6 +73,7 @@ function toDTO(product: ProductRecord): ProductDTO {
     lowStock: product.lowStock,
     externalId: product.externalId,
     imageUrl: product.imageUrl,
+    packaging: parsePackaging(product.packaging),
     commission: product.commission
       ? { commissionAmount: decimalToNumber(product.commission.commissionAmount) }
       : null,
@@ -111,6 +115,7 @@ export async function createProduct(
     price: input.price,
     externalId: input.externalId,
     imageUrl: input.imageUrl,
+    packaging: packagingToDb(input.packaging),
   });
 
   await bumpCatalogVersion(CatalogEntityType.PRODUCT, product.id, CatalogChangeType.UPSERT);
@@ -156,7 +161,11 @@ export async function updateProduct(
     await categoriesService.assertCategoryExists(input.categoryId);
   }
 
-  const product = await productsRepository.update(productId, input);
+  const { packaging, ...fields } = input;
+  const product = await productsRepository.update(productId, {
+    ...fields,
+    packaging: packagingToDb(packaging),
+  });
   await bumpCatalogVersion(CatalogEntityType.PRODUCT, product.id, CatalogChangeType.UPSERT);
   return toDTO(product);
 }

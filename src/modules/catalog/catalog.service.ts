@@ -6,6 +6,7 @@ import * as catalogRepository from './catalog.repository';
 import * as categoriesRepository from '../categories/categories.repository';
 import { isBusinessOpen } from '../businesses/business-status.service';
 import { resolveEffectivePrice } from '../businesses/effective-price';
+import { parsePackaging, type PackagingOption } from '../businesses/packaging';
 import type {
   ListCatalogBusinessesQuery,
   ListCatalogChangesQuery,
@@ -73,6 +74,8 @@ export interface CatalogProductDTO {
   offer: CatalogProductOfferDTO | null;
   // Fase 22: con ?v=<updatedAt> para que una imagen nueva invalide el cache del móvil.
   imageUrl: string | null;
+  // Opciones de empaque a elegir al comprar ([{ name, price, capacity? }]); null = sin empaque.
+  packaging: PackagingOption[] | null;
   // El catálogo solo lista productos con available=true (ver findCatalogProducts) — lowStock
   // es la señal de "todavía se puede comprar, pero se puede agotar pronto".
   lowStock: boolean;
@@ -111,6 +114,7 @@ interface CatalogProductRecord {
   categoryId: string | null;
   price: Prisma.Decimal | null;
   imageUrl: string | null;
+  packaging: Prisma.JsonValue | null;
   lowStock: boolean;
   updatedAt: Date;
   categoryRef: { name: string } | null;
@@ -184,6 +188,7 @@ function toProductDTO(product: CatalogProductRecord): CatalogProductDTO {
     effectivePrice: effective?.price ?? null,
     offer,
     imageUrl: versionedUrl(product.imageUrl, product.updatedAt),
+    packaging: parsePackaging(product.packaging),
     lowStock: product.lowStock,
   };
 }
