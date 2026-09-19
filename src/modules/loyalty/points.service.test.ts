@@ -63,6 +63,7 @@ vi.mock('./points.repository', () => ({
   listTransactions: vi.fn(),
 }));
 
+import * as repository from './points.repository';
 import * as service from './points.service';
 
 const seedOrder = (overrides: Record<string, unknown> = {}) => {
@@ -257,7 +258,6 @@ describe('robustez', () => {
   });
 
   it('syncOrderPointsSafely nunca lanza: un fallo de puntos no rompe completar el pedido', async () => {
-    const repository = await import('./points.repository');
     vi.mocked(repository.findOrderForPoints).mockRejectedValueOnce(new Error('BD caída'));
 
     await expect(service.syncOrderPointsSafely('o1')).resolves.toBeUndefined();
@@ -265,7 +265,6 @@ describe('robustez', () => {
 
   it('y como es idempotente, la siguiente sincronización recupera los puntos que faltaron', async () => {
     seedOrder({ platformFee: 50 });
-    const repository = await import('./points.repository');
     vi.mocked(repository.findOrderForPoints).mockRejectedValueOnce(new Error('BD caída'));
 
     await service.syncOrderPointsSafely('o1'); // falló: 0 puntos
