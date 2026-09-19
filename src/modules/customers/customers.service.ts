@@ -12,6 +12,8 @@ export interface CustomerDTO {
   email: string | null;
   phoneVerified: boolean;
   emailVerified: boolean;
+  /** Saldo de puntos de fidelización (entero). */
+  pointsBalance: number;
   lastOrderAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +27,7 @@ export function toCustomerDTO(customer: CustomerDTO): CustomerDTO {
     email: customer.email,
     phoneVerified: customer.phoneVerified,
     emailVerified: customer.emailVerified,
+    pointsBalance: customer.pointsBalance,
     lastOrderAt: customer.lastOrderAt,
     createdAt: customer.createdAt,
     updatedAt: customer.updatedAt,

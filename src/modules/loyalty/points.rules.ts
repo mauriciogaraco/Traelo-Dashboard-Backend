@@ -42,7 +42,10 @@ export interface PointsRuleConfig {
   enabledFrom: Date;
 }
 
-export function isOrderEligibleForPoints(order: PointsOrderFacts, config: PointsRuleConfig): boolean {
+export function isOrderEligibleForPoints(
+  order: PointsOrderFacts,
+  config: PointsRuleConfig,
+): boolean {
   return (
     order.status === 'COMPLETED' &&
     order.customerId !== null &&

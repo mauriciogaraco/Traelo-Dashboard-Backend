@@ -12,6 +12,7 @@ import * as commissionCalculator from '../businesses/commission-calculator';
 import * as systemConfigService from '../../config/system-config.service';
 import * as customersService from '../customers/customers.service';
 import * as customersRepository from '../customers/customers.repository';
+import * as pointsService from '../loyalty/points.service';
 import * as ordersRepository from './orders.repository';
 import type { OrderWithRelations } from './orders.repository';
 import * as calc from './orders.calculations';
@@ -567,6 +568,12 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   }
 
   const order = await ordersRepository.update(id, data);
+
+  // Un pedido COMPLETED corregido en montos puede cambiar sus puntos: se suman o se retiran
+  // (con aviso al cliente). Cambios que no tocan el Servicio Tráelo no mueven nada.
+  if (existing.status === 'COMPLETED' && financialFieldsChanged) {
+    await pointsService.syncOrderPointsSafely(id);
+  }
   return toDTO(order);
 }
 
@@ -644,6 +651,8 @@ export async function updateOrderStatus(
       status: 'COMPLETED',
       completedAt: new Date(),
     });
+    // Los puntos se acreditan SOLO al completar (nunca al crear ni al cancelar).
+    await pointsService.syncOrderPointsSafely(id);
     return toDTO(order);
   }
 
@@ -681,6 +690,7 @@ export async function bulkCompleteOrders(ids: string[]): Promise<BulkCompleteOrd
       status: 'COMPLETED',
       completedAt: new Date(),
     });
+    await pointsService.syncOrderPointsSafely(id);
     completed.push(toDTO(order));
   }
 

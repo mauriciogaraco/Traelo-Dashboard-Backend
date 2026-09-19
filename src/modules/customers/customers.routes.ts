@@ -14,6 +14,7 @@ import { customerDevicesRouter } from './customer-devices.routes';
 import { customerFavoritesRouter } from './customer-favorites.routes';
 import { customerOrdersRouter } from './customer-orders.routes';
 import { customerReviewsRouter } from '../reviews/reviews.routes';
+import { customerPointsRouter } from '../loyalty/points.routes';
 
 // Todo lo de /customers exige un cliente autenticado (Bearer de customer-auth): la identidad
 // sale del token, no de la URL. "/customers/me/..." es el alias canónico; con un id explícito
@@ -41,3 +42,4 @@ customersRouter.use('/:id/devices', customerDevicesRouter);
 customersRouter.use('/:id/favorites', customerFavoritesRouter);
 customersRouter.use('/:id/orders', customerOrdersRouter);
 customersRouter.use('/:id/reviews', customerReviewsRouter);
+customersRouter.use('/:id/points', customerPointsRouter);
