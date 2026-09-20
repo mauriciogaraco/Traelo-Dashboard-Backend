@@ -180,3 +180,20 @@ export async function resetDelivererHistory(id: string): Promise<DelivererDTO> {
   const config = await systemConfigService.getSystemConfig();
   return toDTO(updated, config.defaultDelivererCommissionPercentage);
 }
+
+// Registro del token de notificaciones push (app móvil) — ver Deliverer.expoPushToken
+// (schema.prisma). Se sobrescribe sin más: un mensajero con sesión en un dispositivo nuevo
+// reemplaza el token del anterior, no se acumula una lista.
+export async function setDelivererPushToken(
+  id: string,
+  expoPushToken: string | null,
+): Promise<DelivererDTO> {
+  const existing = await deliverersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  const updated = await deliverersRepository.setExpoPushToken(id, expoPushToken);
+  const config = await systemConfigService.getSystemConfig();
+  return toDTO(updated, config.defaultDelivererCommissionPercentage);
+}

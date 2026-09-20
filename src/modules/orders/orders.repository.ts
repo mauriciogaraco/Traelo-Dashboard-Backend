@@ -71,3 +71,25 @@ export function countClosedSettlementLines(orderId: string) {
     where: { orderId, settlement: { status: 'CLOSED' } },
   });
 }
+
+// Recordatorios push de "tenés un pedido por recoger" (src/jobs/pending-order-reminders.ts):
+// candidatos crudos — ASSIGNED con mensajero asignado y que todavía no arrancó la recogida
+// (pickingUpAt null; ver Order.pickingUpAt/onTheWayAt, etapas del reparto) — a los que no se
+// les mandó un recordatorio dentro del margen prudente. El otro filtro (cuánto hace que el
+// pedido entró en este estado) se aplica en el job, en memoria — mismo criterio que `findMany`,
+// el volumen de pedidos activos es chico, no vale la pena un where más elaborado en SQL.
+export function findPendingReminderCandidates(reminderCutoff: Date) {
+  return prisma.order.findMany({
+    where: {
+      status: 'ASSIGNED',
+      delivererId: { not: null },
+      pickingUpAt: null,
+      OR: [{ lastReminderPushAt: null }, { lastReminderPushAt: { lte: reminderCutoff } }],
+    },
+    include: orderInclude,
+  });
+}
+
+export function markReminderSent(id: string, at: Date) {
+  return prisma.order.update({ where: { id }, data: { lastReminderPushAt: at } });
+}

@@ -2,6 +2,7 @@ import { NotFoundError, BadRequestError, ConflictError, ForbiddenError } from '.
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
 import { resolveDateRange } from '../../shared/date-range';
+import { notifyDeliverer } from '../../shared/push';
 import { Prisma } from '../../generated/prisma/client';
 import type { CommissionType, OrderSource, OrderStatus } from '../../generated/prisma/enums';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -742,7 +743,20 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   if (existing.status === 'COMPLETED' && financialFieldsChanged) {
     await pointsService.syncOrderPointsSafely(id);
   }
-  return toDTO(order);
+  const dto = toDTO(order);
+
+  // El staff editó el vale de un pedido que ya tiene mensajero — avisarle a él por push (app
+  // móvil). updateOrder solo lo llama el staff/dashboard (no hay edición propia del mensajero).
+  if (existing.delivererId) {
+    await notifyDeliverer(
+      existing.delivererId,
+      'Tu vale fue actualizado',
+      `El pedido #${dto.orderNumber} tiene cambios — revísalo en la app.`,
+      { orderId: dto.id, type: 'ORDER_EDITED' },
+    );
+  }
+
+  return dto;
 }
 
 export async function deleteOrder(id: string): Promise<void> {
@@ -804,7 +818,18 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
     delivererEarning: delivererShare,
   });
 
-  return toDTO(order);
+  const dto = toDTO(order);
+
+  // Avisa al mensajero por push (app móvil) que se le asignó este pedido. No bloquea la
+  // respuesta si no tiene token o el envío falla (notifyDeliverer nunca lanza).
+  await notifyDeliverer(
+    input.delivererId,
+    'Nuevo pedido asignado',
+    `Vale #${dto.orderNumber} — ${dto.customerAddress}`,
+    { orderId: dto.id, type: 'ORDER_ASSIGNED' },
+  );
+
+  return dto;
 }
 
 /**

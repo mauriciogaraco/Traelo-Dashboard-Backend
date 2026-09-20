@@ -62,3 +62,12 @@ export function setHistoryResetAt(delivererId: string, historyResetAt: Date) {
     include: { user: true },
   });
 }
+
+// Notificaciones push (app móvil) — ver el comentario en Deliverer.expoPushToken (schema.prisma).
+export function setExpoPushToken(delivererId: string, expoPushToken: string | null) {
+  return prisma.deliverer.update({
+    where: { id: delivererId },
+    data: { expoPushToken },
+    include: { user: true },
+  });
+}

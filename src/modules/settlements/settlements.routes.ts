@@ -18,9 +18,12 @@ settlementsRouter.get(
   settlementsController.listSettlements,
 );
 
+// DELIVERER puede generar su propio cuadre diario (autoservicio, "al terminar el día") — ver
+// resolveDelivererScope en el controller, que ignora cualquier delivererId que mande el cliente
+// y usa siempre el propio. Staff conserva la generación para cualquier mensajero, sin cambios.
 settlementsRouter.post(
   '/daily/generate',
-  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.DELIVERER),
   validate({ body: generateSettlementSchema }),
   settlementsController.generateDailySettlement,
 );
