@@ -2,7 +2,6 @@ import { NotFoundError, BadRequestError, ConflictError, ForbiddenError } from '.
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
 import { resolveDateRange } from '../../shared/date-range';
-import { sendTelegramMessage } from '../../shared/telegram';
 import { Prisma } from '../../generated/prisma/client';
 import type { CommissionType, OrderSource, OrderStatus } from '../../generated/prisma/enums';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -13,6 +12,10 @@ import * as systemConfigService from '../../config/system-config.service';
 import * as customersService from '../customers/customers.service';
 import * as customersRepository from '../customers/customers.repository';
 import * as pointsService from '../loyalty/points.service';
+import * as rewardsRepository from '../loyalty/rewards.repository';
+import * as rewardsService from '../loyalty/rewards.service';
+import type { RedemptionPlan } from '../loyalty/rewards.rules';
+import { releaseLocationIfIdleSafely } from '../tracking/deliverer-location.service';
 import * as ordersRepository from './orders.repository';
 import type { OrderWithRelations } from './orders.repository';
 import * as calc from './orders.calculations';
@@ -32,6 +35,9 @@ export interface OrderItemDTO {
   unitPrice: number;
   subtotal: number;
   commissionAmount: number;
+  /** Canje: puntos usados y valor en CUP cubierto por una unidad de esta línea (0 = sin canje). */
+  pointsRedeemed: number;
+  pointsDiscount: number;
 }
 
 export interface OrderBusinessDTO {
@@ -43,6 +49,14 @@ export interface OrderBusinessDTO {
   commissionTypeSnapshot: CommissionType | null;
   commissionRateSnapshot: number | null;
   items: OrderItemDTO[];
+}
+
+export interface OrderRedemptionDTO {
+  rewardId: string;
+  rewardName: string;
+  pointsCost: number;
+  moneyValue: number;
+  status: 'APPLIED' | 'REFUNDED';
 }
 
 export interface OrderDTO {
@@ -67,7 +81,9 @@ export interface OrderDTO {
   raffleNumber: number | null;
   productsTotal: number; // subtotal de productos — 100% del negocio
   platformFee: number; // "Servicio Tráelo": cargo visible, redondeado, ganancia de Tráelo
-  total: number; // productsTotal + deliveryFee + platformFee
+  total: number; // productsTotal - pointsDiscount + deliveryFee + platformFee (lo que paga el cliente)
+  pointsDiscount: number; // valor en CUP cubierto con puntos (0 sin canje); no reduce productsTotal
+  redemption: OrderRedemptionDTO | null;
   traeloEarning: number; // ganancia total de Tráelo = platformFee + traeloDeliveryShare
   traeloDeliveryShare: number; // parte de Tráelo en la mensajería
   delivererEarning: number;
@@ -100,6 +116,16 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     productsTotal: decimalToNumber(order.productsTotal),
     platformFee: decimalToNumber(order.platformFee),
     total: decimalToNumber(order.total),
+    pointsDiscount: decimalToNumber(order.pointsDiscount),
+    redemption: order.redemption
+      ? {
+          rewardId: order.redemption.rewardId,
+          rewardName: order.redemption.rewardName,
+          pointsCost: order.redemption.pointsCost,
+          moneyValue: decimalToNumber(order.redemption.moneyValue),
+          status: order.redemption.status,
+        }
+      : null,
     traeloEarning: decimalToNumber(order.traeloEarning),
     traeloDeliveryShare: decimalToNumber(order.traeloDeliveryShare),
     delivererEarning: decimalToNumber(order.delivererEarning),
@@ -120,25 +146,13 @@ function toDTO(order: OrderWithRelations): OrderDTO {
         unitPrice: decimalToNumber(item.unitPrice),
         subtotal: decimalToNumber(item.subtotal),
         commissionAmount: decimalToNumber(item.commissionAmount),
+        pointsRedeemed: item.pointsRedeemed,
+        pointsDiscount: decimalToNumber(item.pointsDiscount),
       })),
     })),
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
-}
-
-// Fase 14: mensaje operacional para el grupo/canal de Telegram. Solo texto — nunca es la
-// fuente de verdad del pedido, que ya vive en Postgres antes de que esto se arme.
-function formatOrderNotification(order: OrderDTO): string {
-  const businessNames = order.businesses.map((b) => b.businessName).join(', ') || '—';
-  const lines = [
-    `🆕 <b>Pedido #${order.orderNumber}</b> (${order.source})`,
-    `Cliente: ${order.customerName} — ${order.customerPhone}`,
-    `Dirección: ${order.customerAddress}${order.addressReference ? ` (${order.addressReference})` : ''}`,
-    `Negocio(s): ${businessNames}`,
-    `Total: $${order.total.toFixed(2)} CUP`,
-  ];
-  return lines.join('\n');
 }
 
 // Fase 14, pedido explícito del negocio: evita que un cliente reenvíe pedidos en bucle
@@ -209,7 +223,11 @@ interface PreparedGroup {
   commissionEarned: Prisma.Decimal;
   commissionTypeSnapshot: CommissionType;
   commissionRateSnapshot: Prisma.Decimal | null;
-  items: (calc.ComputedItemPrice & { commissionAmount: Prisma.Decimal })[];
+  items: (calc.ComputedItemPrice & {
+    commissionAmount: Prisma.Decimal;
+    pointsRedeemed?: number;
+    pointsDiscount?: Prisma.Decimal;
+  })[];
 }
 
 /**
@@ -288,6 +306,9 @@ function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
         unitPrice: item.unitPrice,
         subtotal: item.subtotal,
         commissionAmount: item.commissionAmount,
+        ...(item.pointsRedeemed
+          ? { pointsRedeemed: item.pointsRedeemed, pointsDiscount: item.pointsDiscount }
+          : {}),
       })),
     },
   }));
@@ -298,6 +319,102 @@ export interface CreateOrderOptions {
   // dispositivo para seguir el pedido sin cuenta. No forma parte de CreateOrderInput a
   // propósito: el dashboard (POST /orders) nunca debe poder fijarlo.
   guestAccessTokenHash?: string;
+  // Pin de entrega OPCIONAL (snapshot en el pedido, como la dirección). Solo lo fijan los flujos
+  // de la app; tampoco forma parte de CreateOrderInput. null/ausente = sin ubicación.
+  destination?: { latitude: number; longitude: number } | null;
+  // Canje de una recompensa (solo clientes con cuenta; el servidor resuelve costo, precio y saldo).
+  redemption?: rewardsService.RedemptionRequest;
+}
+
+/** Marca en el grupo la línea que cubre el canje (UNA unidad: su precio efectivo y los puntos). */
+function markRedeemedLine(groups: PreparedGroup[], plan: RedemptionPlan): void {
+  const group = groups.find((entry) => entry.businessId === plan.businessId);
+  const line = group?.items.find((item) => item.productId === plan.productId);
+  if (line) {
+    line.pointsRedeemed = plan.pointsCost;
+    line.pointsDiscount = new Prisma.Decimal(plan.moneyValue);
+  }
+}
+
+function toCartLines(groups: PreparedGroup[]) {
+  return groups.flatMap((group) =>
+    group.items.map((item) => ({
+      productId: item.productId as string,
+      businessId: group.businessId,
+      unitPrice: decimalToNumber(item.unitPrice),
+    })),
+  );
+}
+
+export interface OrderQuoteDTO {
+  productsTotal: number;
+  pointsDiscount: number;
+  /** Productos que paga el cliente en dinero: productsTotal - pointsDiscount. */
+  productsToPay: number;
+  deliveryFee: number;
+  platformFee: number;
+  total: number;
+  redemption:
+    | (Pick<RedemptionPlan, 'rewardId' | 'rewardName' | 'pointsCost' | 'balanceBefore' | 'balanceAfter'> & {
+        moneyValue: number;
+      })
+    | null;
+}
+
+/**
+ * Cotización de solo lectura: los MISMOS cálculos que createOrder (precios, comisiones, Servicio
+ * Tráelo, canje) pero sin escribir nada. La app la usa para mostrar el desglose y confirmar; el
+ * pedido real vuelve a calcularlo todo.
+ */
+export async function quoteOrder(
+  input: { businesses: CreateOrderInput['businesses']; deliveryFee: number; customerId?: string },
+  options: { redemption?: rewardsService.RedemptionRequest } = {},
+): Promise<OrderQuoteDTO> {
+  const businessIds = input.businesses.map((group) => group.businessId);
+  if (new Set(businessIds).size !== businessIds.length) {
+    throw new BadRequestError('No se puede repetir el mismo negocio en un pedido');
+  }
+  const preparedGroups = await prepareBusinessGroups(input.businesses);
+  const deliveryFee = new Prisma.Decimal(input.deliveryFee);
+  const totals = summarizeGroups(preparedGroups, deliveryFee);
+
+  let plan: RedemptionPlan | null = null;
+  if (options.redemption) {
+    plan = await rewardsService.resolveRedemptionPlan({
+      customerId: input.customerId,
+      request: options.redemption,
+      lines: toCartLines(preparedGroups),
+    });
+  }
+  const pointsDiscount = new Prisma.Decimal(plan?.moneyValue ?? 0);
+
+  return {
+    productsTotal: decimalToNumber(totals.productsTotal),
+    pointsDiscount: decimalToNumber(pointsDiscount),
+    productsToPay: decimalToNumber(totals.productsTotal.minus(pointsDiscount)),
+    deliveryFee: decimalToNumber(deliveryFee),
+    platformFee: decimalToNumber(totals.platformFee),
+    total: decimalToNumber(totals.productsTotal.minus(pointsDiscount).plus(deliveryFee).plus(totals.platformFee)),
+    redemption: plan
+      ? {
+          rewardId: plan.rewardId,
+          rewardName: plan.rewardName,
+          pointsCost: plan.pointsCost,
+          moneyValue: plan.moneyValue,
+          balanceBefore: plan.balanceBefore,
+          balanceAfter: plan.balanceAfter,
+        }
+      : null,
+  };
+}
+
+function summarizeGroups(groups: PreparedGroup[], deliveryFee: Prisma.Decimal) {
+  const subtotal = groups.reduce((acc, group) => acc.plus(group.subtotal), new Prisma.Decimal(0));
+  const rawCommissionSum = groups.reduce(
+    (acc, group) => acc.plus(group.commissionEarned),
+    new Prisma.Decimal(0),
+  );
+  return calc.computeOrderTotals({ subtotal, rawCommissionSum, deliveryFee });
 }
 
 export async function createOrder(
@@ -327,19 +444,23 @@ export async function createOrder(
   const preparedGroups = await prepareBusinessGroups(input.businesses);
 
   const deliveryFee = new Prisma.Decimal(input.deliveryFee);
-  const subtotal = preparedGroups.reduce(
-    (acc, group) => acc.plus(group.subtotal),
-    new Prisma.Decimal(0),
-  );
-  const rawCommissionSum = preparedGroups.reduce(
-    (acc, group) => acc.plus(group.commissionEarned),
-    new Prisma.Decimal(0),
-  );
-  const { productsTotal, platformFee: computedPlatformFee } = calc.computeOrderTotals({
-    subtotal,
-    rawCommissionSum,
+  const { productsTotal, platformFee: computedPlatformFee } = summarizeGroups(
+    preparedGroups,
     deliveryFee,
-  });
+  );
+
+  // Canje de puntos (solo cliente con cuenta): el servidor valida recompensa, producto y saldo, y
+  // marca la línea cubierta. Los puntos solo restan del producto; nunca de mensajería ni Servicio.
+  let redemptionPlan: RedemptionPlan | null = null;
+  if (options.redemption) {
+    redemptionPlan = await rewardsService.resolveRedemptionPlan({
+      customerId: input.customerId,
+      request: options.redemption,
+      lines: toCartLines(preparedGroups),
+    });
+    markRedeemedLine(preparedGroups, redemptionPlan);
+  }
+  const pointsDiscount = new Prisma.Decimal(redemptionPlan?.moneyValue ?? 0);
   // El staff puede pedir una excepción puntual (p.ej. 0 cuando no se cobró el servicio en
   // este pedido). El detalle sin redondear por negocio (commissionEarned) no se toca — sigue
   // reflejando lo que cada negocio generó, para que las liquidaciones no pierdan precisión.
@@ -347,19 +468,26 @@ export async function createOrder(
     input.platformFeeOverride !== undefined
       ? new Prisma.Decimal(input.platformFeeOverride)
       : computedPlatformFee;
-  const total = productsTotal.plus(deliveryFee).plus(platformFee);
+  const total = productsTotal.minus(pointsDiscount).plus(deliveryFee).plus(platformFee);
 
   let order: OrderWithRelations;
   try {
-    order = await ordersRepository.create({
+    const orderData: Prisma.OrderCreateInput = {
       customerName: input.customerName,
       customerAddress: input.customerAddress,
       addressReference: input.addressReference,
+      ...(options.destination
+        ? {
+            destinationLatitude: options.destination.latitude,
+            destinationLongitude: options.destination.longitude,
+          }
+        : {}),
       customerPhone: input.customerPhone,
       deliveryFee,
       status: 'PENDING',
       productsTotal,
       platformFee,
+      pointsDiscount,
       total,
       // Todavía no hay mensajero asignado: la ganancia de Tráelo por ahora es solo el Servicio Tráelo.
       traeloEarning: platformFee,
@@ -374,7 +502,16 @@ export async function createOrder(
       businesses: {
         create: toBusinessesCreateInput(preparedGroups),
       },
-    });
+    };
+    // Con canje, pedido + redención + descuento de puntos + ledger van en UNA transacción.
+    order = redemptionPlan
+      ? await rewardsRepository.createOrderWithRedemption({
+          orderData,
+          customerId: input.customerId as string,
+          plan: redemptionPlan,
+          divisor: await rewardsService.getPointsDivisor(),
+        })
+      : await ordersRepository.create(orderData);
   } catch (error) {
     // Carrera: dos requests con el mismo clientRequestId llegaron casi al mismo tiempo y
     // ambas pasaron el chequeo de arriba antes de que la primera terminara de escribir. El
@@ -399,13 +536,8 @@ export async function createOrder(
 
   const dto = toDTO(order);
 
-  // Fase 14: solo pedidos que NO entró el staff a mano — ellos ya saben que lo crearon, una
-  // notificación acá sería ruido. Nunca puede tumbar la creación del pedido (ver
-  // sendTelegramMessage) y no se dispara en los retornos tempranos de arriba (reproducción
-  // idempotente o carrera perdida), así que nunca se manda duplicada.
-  if (dto.source !== 'MANUAL') {
-    await sendTelegramMessage(formatOrderNotification(dto));
-  }
+  // Los pedidos de la app ya NO se envían a Telegram: la base de datos es la fuente de verdad y el
+  // dashboard los muestra. (Antes se avisaba al grupo de Telegram por cada pedido que no era manual.)
 
   return dto;
 }
@@ -488,6 +620,15 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
     }
   }
 
+  // Un canje queda atado a las líneas del pedido: si se cambian los productos, el canje (y el
+  // descuento) perdería su sentido. Se cancela el pedido (los puntos vuelven) y se crea otro.
+  if (input.businesses !== undefined && existing.redemption?.status === 'APPLIED') {
+    throw new ConflictError(
+      'Este pedido tiene un canje de puntos: no se pueden cambiar sus productos. Cancélalo (los puntos se devuelven) y crea otro.',
+      'ORDER_HAS_REDEMPTION',
+    );
+  }
+
   const data: Prisma.OrderUpdateInput = {
     customerName: input.customerName,
     customerAddress: input.customerAddress,
@@ -547,7 +688,10 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
 
     if (deliveryFeeChanged) data.deliveryFee = deliveryFee;
     if (platformFeeOverrideChanged || itemsChanged) data.platformFee = platformFee;
-    data.total = productsTotal.plus(deliveryFee).plus(platformFee);
+    data.total = productsTotal
+      .minus(new Prisma.Decimal(existing.pointsDiscount))
+      .plus(deliveryFee)
+      .plus(platformFee);
 
     if (existing.delivererId) {
       const deliverer = await deliverersRepository.findById(existing.delivererId);
@@ -595,6 +739,10 @@ export async function deleteOrder(id: string): Promise<void> {
   const settlementLines = await ordersRepository.countSettlementLines(id);
   if (settlementLines > 0) {
     throw new ConflictError('No se puede eliminar un pedido que ya forma parte de un cuadre');
+  }
+  if (existing.redemption?.status === 'APPLIED') {
+    await rewardsRepository.removeOrderWithRefund(id);
+    return;
   }
   await ordersRepository.remove(id);
 }
@@ -653,13 +801,21 @@ export async function updateOrderStatus(
     });
     // Los puntos se acreditan SOLO al completar (nunca al crear ni al cancelar).
     await pointsService.syncOrderPointsSafely(id);
+    // Privacidad: sin más entregas activas, el mensajero deja de tener ubicación guardada.
+    await releaseLocationIfIdleSafely(order.delivererId);
     return toDTO(order);
   }
 
   if (existing.status !== 'PENDING' && existing.status !== 'ASSIGNED') {
     throw new ConflictError('Solo se puede cancelar un pedido PENDING o ASSIGNED');
   }
-  const order = await ordersRepository.update(id, { status: 'CANCELLED', cancelledAt: new Date() });
+  const cancelData = { status: 'CANCELLED' as const, cancelledAt: new Date() };
+  // Con canje aplicado, los puntos vuelven al cliente en la misma transacción que la cancelación.
+  const order =
+    existing.redemption?.status === 'APPLIED'
+      ? await rewardsRepository.cancelOrderWithRefund(id, cancelData)
+      : await ordersRepository.update(id, cancelData);
+  await releaseLocationIfIdleSafely(order.delivererId);
   return toDTO(order);
 }
 
@@ -691,6 +847,7 @@ export async function bulkCompleteOrders(ids: string[]): Promise<BulkCompleteOrd
       completedAt: new Date(),
     });
     await pointsService.syncOrderPointsSafely(id);
+    await releaseLocationIfIdleSafely(order.delivererId);
     completed.push(toDTO(order));
   }
 

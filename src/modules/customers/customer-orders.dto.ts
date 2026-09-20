@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from '../../shared/http';
+import { deliveryLocationSchema } from '../../shared/location';
 
 // Exportados (no solo usados acá): checkout.dto.ts los reutiliza para el flujo de invitado,
 // que comparte exactamente la misma forma de "negocios + items" que este endpoint.
@@ -27,6 +28,8 @@ export const createAppOrderSchema = z
     addressId: z.cuid('id de dirección inválido').optional(),
     address: z.string().min(3).max(300).optional(),
     addressReference: z.string().max(200).optional(),
+    // Pin opcional; misma semántica que en /checkout (ver checkout.dto.ts).
+    location: deliveryLocationSchema.nullable().optional(),
     clientRequestId: z.string().min(8).max(100).optional(),
     businesses: z.array(appOrderBusinessSchema).min(1),
   })

@@ -17,6 +17,7 @@ describe('creación de pedidos desde la app (integración)', () => {
   let businessBId: string; // deliveryFeeBase 350 (simula DLM)
   let productAId: string; // sin oferta
   let productBId: string; // con oferta activa
+  let productOfBusinessBId: string; // producto del negocio B (pedidos multi-negocio)
   let unavailableProductId: string;
   let customerId: string;
   let addressId: string;
@@ -46,6 +47,19 @@ describe('creación de pedidos desde la app (integración)', () => {
     });
     businessBId = businessB.id;
 
+    // Un negocio sin horario cuenta como cerrado (NO_SCHEDULE_CONFIGURED): abierto 24 h todos los días.
+    for (const businessId of [businessAId, businessBId]) {
+      await prisma.businessHours.createMany({
+        data: Array.from({ length: 7 }, (_, dayOfWeek) => ({
+          businessId,
+          dayOfWeek,
+          openTime: new Date(Date.UTC(1970, 0, 1, 0, 0)),
+          closeTime: new Date(Date.UTC(1970, 0, 1, 23, 59)),
+          closed: false,
+        })),
+      });
+    }
+
     const productA = await productsService.createProduct(businessAId, {
       name: 'Producto sin oferta',
       price: 500,
@@ -66,6 +80,12 @@ describe('creación de pedidos desde la app (integración)', () => {
         active: true,
       },
     });
+
+    const productOfBusinessB = await productsService.createProduct(businessBId, {
+      name: 'Producto del negocio B',
+      price: 200,
+    });
+    productOfBusinessBId = productOfBusinessB.id;
 
     const unavailableProduct = await productsService.createProduct(businessAId, {
       name: 'Producto agotado',
@@ -92,12 +112,19 @@ describe('creación de pedidos desde la app (integración)', () => {
       isDefault: true,
     });
     addressId = address.id;
-  });
+  }, 60_000);
 
   afterAll(async () => {
-    await prisma.order.deleteMany({ where: { customerId } });
-    await prisma.customer.delete({ where: { id: customerId } });
-    await prisma.business.deleteMany({ where: { id: { in: [businessAId, businessBId] } } });
+    // Si beforeAll falló (p. ej. timeout con la BD remota) estos ids quedan undefined, y Prisma
+    // trata `where: { customerId: undefined }` como "sin filtro": borraría pedidos de TODOS los clientes.
+    if (customerId) {
+      await prisma.order.deleteMany({ where: { customerId } });
+      await prisma.customer.delete({ where: { id: customerId } });
+    }
+    const businessIds = [businessAId, businessBId].filter(Boolean);
+    if (businessIds.length > 0) {
+      await prisma.business.deleteMany({ where: { id: { in: businessIds } } });
+    }
   });
 
   // El cooldown antispam (ver orders.service.ts: assertNoRecentPendingAppOrder) bloquea un
@@ -158,19 +185,16 @@ describe('creación de pedidos desde la app (integración)', () => {
       addressId,
       businesses: [
         { businessId: businessAId, items: [{ productId: productAId, quantity: 1 }] },
-        { businessId: businessBId, items: [{ productId: productAId, quantity: 1 }] },
+        { businessId: businessBId, items: [{ productId: productOfBusinessBId, quantity: 1 }] },
       ],
     });
 
-    // Nota: usa productAId (que pertenece a businessAId) también como línea de businessBId
-    // solo para simplificar el fixture — este test no valida a qué negocio pertenece cada
-    // producto, eso ya lo cubre products.service.
     expect(order.deliveryFee).toBe(350 + 100 + (isNight ? 100 : 0));
   });
 
   it('actualiza Customer.lastOrderAt al crear el pedido', async () => {
+    // Los tests anteriores ya crearon pedidos para este cliente, así que no parte de null.
     const before = await customersService.getCustomer(customerId);
-    expect(before.lastOrderAt).toBeNull();
 
     await customerOrdersService.createAppOrder(customerId, {
       addressId,
@@ -179,6 +203,7 @@ describe('creación de pedidos desde la app (integración)', () => {
 
     const after = await customersService.getCustomer(customerId);
     expect(after.lastOrderAt).not.toBeNull();
+    expect(after.lastOrderAt!.getTime()).toBeGreaterThanOrEqual(before.lastOrderAt?.getTime() ?? 0);
   });
 
   // Fase 11: un producto/negocio inválido ya no tira un error genérico del primer ítem que

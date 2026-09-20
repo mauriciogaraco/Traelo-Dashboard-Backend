@@ -90,6 +90,8 @@ const { values: args } = parseArgs({
     'with-schedule-extra': { type: 'boolean', default: false },
     'skip-products': { type: 'boolean', default: false },
     'allow-product-logo': { type: 'boolean', default: false },
+    'allow-zero-price': { type: 'boolean', default: false },
+    concurrency: { type: 'string' },
   },
 });
 
@@ -106,6 +108,10 @@ const WITH_SCHEDULE_EXTRA = args['with-schedule-extra'] === true;
 const SKIP_PRODUCTS = args['skip-products'] === true;
 // Permite usar como logo una imagen que vive en assets/images/products/ (ej. La Marina).
 const ALLOW_PRODUCT_LOGO = args['allow-product-logo'] === true;
+// Por defecto se omiten los productos con precio 0 (saldrían "gratis" en la app).
+const ALLOW_ZERO_PRICE = args['allow-zero-price'] === true;
+// Productos procesados a la vez por negocio. La base es remota: en serie cada producto tarda segundos.
+const CONCURRENCY = Math.min(8, Math.max(1, Number(args.concurrency ?? '1') || 1));
 
 function readJson<T>(relativePath: string): T {
   return JSON.parse(readFileSync(join(SOURCE, relativePath), 'utf8')) as T;
@@ -290,6 +296,18 @@ function packagingFor(p: CatalogProduct): PackagingOption[] | undefined {
   if (!p.packaging?.length) return undefined;
   const parsed = packagingSchema.safeParse(p.packaging);
   return parsed.success ? parsed.data : undefined;
+}
+
+async function runPool<T>(items: T[], size: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(size, items.length) }, async () => {
+      while (next < items.length) {
+        const item = items[next++] as T;
+        await worker(item);
+      }
+    }),
+  );
 }
 
 function imagePath(publicUrl: string | undefined): string | null {
@@ -665,7 +683,9 @@ async function main(): Promise<void> {
         categoryIdByName.set(name, category.id);
       }
 
-      for (const { p, file, price, description } of analysis.plan) {
+      const zeroPrice = ALLOW_ZERO_PRICE ? [] : analysis.plan.filter((x) => !(x.p.price > 0));
+      for (const x of zeroPrice) console.log(`  ⚠ ${x.p.id} "${x.p.name}" omitido: precio 0 (usa --allow-zero-price para importarlo).`);
+      const processProduct = async ({ p, file, price, description }: ProductPlan): Promise<void> => {
         try {
           const fields = {
             name: p.name,
@@ -678,7 +698,7 @@ async function main(): Promise<void> {
           const existing = byExternal.get(p.id);
           if (!existing && duplicates.some((x) => x.p.id === p.id)) {
             summary.skippedDup++;
-            continue;
+            return;
           }
           let productId: string;
           let hadImage = Boolean(existing?.imageUrl);
@@ -724,7 +744,12 @@ async function main(): Promise<void> {
           summary.failures.push(`${p.id}: ${(error as Error).message.split('\n')[0]}`);
           console.error(`  ✗ ${p.id} ${p.name}: ${(error as Error).message.split('\n')[0]}`);
         }
-      }
+      };
+      await runPool(
+        analysis.plan.filter((x) => !zeroPrice.includes(x)),
+        CONCURRENCY,
+        processProduct,
+      );
       summary.status = summary.failures.length ? `PARCIAL (${summary.failures.length} fallos)` : 'OK';
       console.log(`Listo: ${summary.created} creados, ${summary.updated} actualizados, ${summary.unchanged} sin tocar, ${summary.imagesUploaded} imágenes subidas, ${summary.skippedDup} omitidos por duplicado.`);
     } catch (error) {

@@ -98,6 +98,7 @@ export function findEligibleOrders(delivererId: string, periodStart: Date, perio
       delivererEarning: true,
       traeloDeliveryShare: true,
       platformFee: true,
+      pointsDiscount: true,
     },
   });
 }

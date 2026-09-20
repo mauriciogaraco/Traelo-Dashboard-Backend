@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { isValidPhone, normalizePhone } from '../../shared/phone';
+import { deliveryLocationSchema } from '../../shared/location';
 import { appOrderBusinessSchema } from '../customers/customer-orders.dto';
 
 export type AppOrderBusinessInput = z.infer<typeof appOrderBusinessSchema>;
+
+// Canje de puntos: SOLO el id de la recompensa. Nunca se aceptan pointsCost, descuento ni totales
+// (zod los descarta): el servidor resuelve costo, precio, saldo y elegibilidad. expectedBalance es
+// únicamente para detectar que la app tenía un saldo viejo (POINTS_BALANCE_CHANGED).
+export const redemptionRequestSchema = z.object({
+  rewardId: z.cuid('id de recompensa inválido'),
+  expectedBalance: z.number().int().min(0).optional(),
+});
 
 // Checkout unificado. NO exige cuenta: sin Authorization es un pedido de invitado; con un
 // Bearer de cliente válido el pedido se vincula a esa cuenta. La identidad sale SIEMPRE del
@@ -27,8 +36,12 @@ export const checkoutOrderSchema = z
     addressId: z.cuid('id de dirección inválido').optional(),
     address: z.string().trim().min(3).max(300).optional(),
     addressReference: z.string().max(200).optional(),
+    // Pin OPCIONAL de la entrega. Ausente: con addressId se usa la ubicación de esa dirección (si
+    // la tiene); null: sin ubicación para este pedido; objeto: esa ubicación. Nunca es requisito.
+    location: deliveryLocationSchema.nullable().optional(),
     clientRequestId: z.string().min(8).max(100).optional(),
     businesses: z.array(appOrderBusinessSchema).min(1),
+    redemption: redemptionRequestSchema.optional(),
   })
   .refine((data) => data.addressId !== undefined || data.address !== undefined, {
     message: 'Debe indicar addressId (una dirección guardada) o address (una nueva)',
@@ -36,3 +49,11 @@ export const checkoutOrderSchema = z
   });
 
 export type CheckoutOrderInput = z.infer<typeof checkoutOrderSchema>;
+
+// Cotización previa a confirmar: solo carrito + canje opcional (no hace falta dirección todavía).
+export const checkoutQuoteSchema = z.object({
+  businesses: z.array(appOrderBusinessSchema).min(1),
+  redemption: redemptionRequestSchema.optional(),
+});
+
+export type CheckoutQuoteInput = z.infer<typeof checkoutQuoteSchema>;

@@ -5,6 +5,11 @@ interface AddressData {
   address: string;
   reference?: string;
   isDefault: boolean;
+  // Ubicación opcional (columnas planas; ver shared/location).
+  latitude?: number | null;
+  longitude?: number | null;
+  locationSource?: 'MANUAL_PIN' | 'DEVICE_LOCATION' | null;
+  locationAccuracy?: number | null;
 }
 
 export function findManyForCustomer(customerId: string) {

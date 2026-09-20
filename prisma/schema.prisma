@@ -69,6 +69,13 @@ enum OrderSource {
   TELEGRAM
 }
 
+// Cómo se obtuvo la ubicación de una dirección. Solo MANUAL_PIN y DEVICE_LOCATION: si algún día
+// el equipo corrige ubicaciones a mano se agrega un valor (ALTER TYPE ... ADD VALUE, sin romper nada).
+enum LocationSource {
+  MANUAL_PIN
+  DEVICE_LOCATION
+}
+
 enum DevicePlatform {
   ANDROID
   IOS
@@ -162,7 +169,26 @@ model Deliverer {
   settlements    Settlement[]
   reviews        DelivererReview[]
 
+  // Última ubicación conocida (seguimiento en vivo). Máximo una fila por mensajero.
+  location DelivererLocation?
+
   @@map("deliverers")
+}
+
+// Última ubicación GPS conocida de un mensajero con entrega activa, para el seguimiento del
+// pedido en la app del cliente. NO es un histórico: cada actualización pisa la fila anterior
+// (upsert por delivererId) y la fila se borra cuando el mensajero se queda sin entregas activas.
+// `updatedAt` lo fija el servidor — nunca un timestamp enviado por el dispositivo.
+model DelivererLocation {
+  id          String    @id @default(cuid())
+  delivererId String    @unique
+  deliverer   Deliverer @relation(fields: [delivererId], references: [id], onDelete: Cascade)
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  updatedAt   DateTime  @updatedAt
+
+  @@map("deliverer_locations")
 }
 
 // ── Clientes (app móvil) ──────────────────────────────────
@@ -245,6 +271,14 @@ model CustomerAddress {
   address    String
   reference  String?
   isDefault  Boolean  @default(false)
+
+  // Ubicación EXACTA opcional (pin que el cliente colocó a mano). La dirección escrita sigue
+  // siendo lo obligatorio; sin coordenadas todo funciona igual, solo sin mapa. Ambas o ninguna.
+  latitude         Float?
+  longitude        Float?
+  locationSource   LocationSource?
+  locationAccuracy Float? // metros; solo si vino del GPS del dispositivo
+
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -424,6 +458,7 @@ model Product {
   orderItems  OrderItem[]
   offers      ProductOffer[]
   favoritedBy CustomerFavoriteProduct[]
+  rewards     Reward[]
 
   @@unique([businessId, externalId])
   @@index([businessId, active, available])
@@ -525,6 +560,11 @@ model Order {
   customerName     String
   customerAddress  String
   addressReference String?
+  // Coordenadas del destino (snapshot, como la dirección). Nullable: los pedidos existentes y
+  // las direcciones que no se pudieron ubicar en el mapa no las tienen; el seguimiento
+  // funciona igual, solo sin marcador de destino.
+  destinationLatitude  Float?
+  destinationLongitude Float?
   customerPhone    String
   deliveryFee      Decimal     @db.Decimal(10, 2)
   status           OrderStatus @default(PENDING)
@@ -566,7 +606,10 @@ model Order {
 
   productsTotal Decimal @db.Decimal(10, 2) // subtotal de productos — 100% del negocio, nunca se toca
   platformFee   Decimal @default(0) @db.Decimal(10, 2) // "Servicio Tráelo": suma de comisiones por negocio, redondeada hacia arriba al múltiplo de 10. 0 en pedidos previos a este cambio (nunca tuvieron un cargo separado).
-  total         Decimal @db.Decimal(10, 2) // productsTotal + deliveryFee + platformFee
+  // Valor en CUP de lo cubierto con puntos (canje de una recompensa). 0 en pedidos sin canje.
+  // productsTotal NO se reduce (el negocio cobra su producto completo); solo baja lo que paga el cliente.
+  pointsDiscount Decimal @default(0) @db.Decimal(10, 2)
+  total         Decimal @db.Decimal(10, 2) // productsTotal - pointsDiscount + deliveryFee + platformFee
 
   // Número del "🎟️ Número del Sorteo" del vale, cuando el pedido participa de una promoción
   // vigente. Opcional: no todos los pedidos ni todas las épocas tienen sorteo activo.
@@ -584,6 +627,7 @@ model Order {
   businessReviews BusinessReview[]
 
   pointsTransactions PointsTransaction[]
+  redemption         RewardRedemption?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -629,6 +673,12 @@ model OrderBusiness {
 enum PointsTransactionType {
   ORDER_COMPLETED
   ORDER_ADJUSTMENT
+  // Bono único por el primer pedido completado desde la app/web (una vez por cliente).
+  FIRST_ORDER_BONUS
+  // Canje de una recompensa al crear el pedido (firmado, negativo).
+  REDEMPTION
+  // Devolución de un canje cuando el pedido se cancela o elimina (firmado, positivo).
+  REDEMPTION_REFUND
 }
 
 model PointsTransaction {
@@ -653,6 +703,58 @@ model PointsTransaction {
   @@index([customerId, createdAt])
   @@index([orderId])
   @@map("points_transactions")
+}
+
+// ── Recompensas y canje (V1) ─────────────────────────────
+// Una recompensa = "este producto se puede obtener con N puntos". No hay equivalencia fija
+// puntos↔CUP: cada recompensa define su propio pointsCost. En V1 siempre apunta a un producto
+// del catálogo (productId obligatorio); el modelo queda separado de Product para poder tener
+// costos distintos, campañas o recompensas temporales sin tocar el catálogo.
+model Reward {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  pointsCost  Int
+  active      Boolean  @default(true)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  redemptions RewardRedemption[]
+
+  @@index([active])
+  @@index([productId])
+  @@map("rewards")
+}
+
+enum RedemptionStatus {
+  APPLIED
+  REFUNDED
+}
+
+// Un canje aplicado a un pedido. orderId es ÚNICO: una recompensa por pedido, garantizado por la
+// base de datos. Guarda snapshots (nombre, costo, valor en CUP) para que el histórico no cambie
+// si después cambia Reward.pointsCost o Product.price.
+model RewardRedemption {
+  id              String           @id @default(cuid())
+  orderId         String           @unique
+  order           Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId      String
+  rewardId        String
+  reward          Reward           @relation(fields: [rewardId], references: [id])
+  productId       String
+  rewardName      String
+  pointsCost      Int
+  moneyValue      Decimal          @db.Decimal(10, 2)
+  status          RedemptionStatus @default(APPLIED)
+  createdAt       DateTime         @default(now())
+  refundedAt      DateTime?
+
+  @@index([customerId, createdAt])
+  @@index([rewardId])
+  @@map("reward_redemptions")
 }
 
 // ── Reseñas ──────────────────────────────────────────────
@@ -715,6 +817,10 @@ model OrderItem {
   unitPrice        Decimal       @db.Decimal(10, 2)
   subtotal         Decimal       @db.Decimal(10, 2)
   commissionAmount Decimal       @db.Decimal(10, 2)
+  // Canje: puntos usados y valor en CUP cubierto por UNA unidad de esta línea (0 = sin canje).
+  // unitPrice conserva el precio original; el precio efectivo es subtotal - pointsDiscount.
+  pointsRedeemed   Int           @default(0)
+  pointsDiscount   Decimal       @default(0) @db.Decimal(10, 2)
 
   @@index([productId])
   @@map("order_items")
@@ -778,6 +884,8 @@ model SystemConfig {
   // Puntos V1: puntos = floor(Servicio Tráelo / pointsServiceDivisor). Solo cuentan los pedidos
   // completados desde pointsEnabledFrom (los anteriores no generan ni ajustan puntos).
   pointsServiceDivisor Int      @default(10)
+  // Bono de bienvenida: puntos fijos por el primer pedido completado desde la app (0 = desactivado).
+  pointsFirstOrderBonus Int     @default(10)
   pointsEnabledFrom    DateTime @default(now())
 
   updatedAt DateTime @updatedAt

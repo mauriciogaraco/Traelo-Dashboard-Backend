@@ -4,7 +4,7 @@ import { optionalCustomerAuth } from '../../middlewares/authenticateCustomer';
 import { publicRateLimit } from '../../middlewares/publicRateLimit';
 import { validate } from '../../middlewares/validate';
 import * as checkoutController from './checkout.controller';
-import { checkoutOrderSchema } from './checkout.dto';
+import { checkoutOrderSchema, checkoutQuoteSchema } from './checkout.dto';
 
 // Público (sin JWT de staff): API key + rate limit. Comprar NO exige cuenta: optionalCustomerAuth
 // identifica al cliente si trae un Bearer válido y deja pasar como invitado si no trae ninguno
@@ -14,3 +14,6 @@ export const checkoutRouter = Router();
 checkoutRouter.use(publicRateLimit, apiKeyAuth, optionalCustomerAuth);
 
 checkoutRouter.post('/', validate({ body: checkoutOrderSchema }), checkoutController.createOrder);
+
+// Cotización de solo lectura (desglose con canje de puntos): no crea ni descuenta nada.
+checkoutRouter.post('/quote', validate({ body: checkoutQuoteSchema }), checkoutController.quote);
