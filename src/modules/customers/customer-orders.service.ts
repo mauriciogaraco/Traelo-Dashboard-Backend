@@ -456,6 +456,7 @@ export interface OrderStatusDTO {
   completedAt: Date | null;
   cancelledAt: Date | null;
   delivererName: string | null;
+  delivererPhotoUrl: string | null;
 }
 
 export function toOrderStatusDTO(order: OrderDTO): OrderStatusDTO {
@@ -469,6 +470,7 @@ export function toOrderStatusDTO(order: OrderDTO): OrderStatusDTO {
     completedAt: order.completedAt,
     cancelledAt: order.cancelledAt,
     delivererName: order.delivererName,
+    delivererPhotoUrl: order.delivererPhotoUrl,
   };
 }
 

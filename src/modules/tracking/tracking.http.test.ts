@@ -142,7 +142,7 @@ function makeOrder(overrides: Row): Row {
     customerId: ME,
     guestAccessTokenHash: null,
     delivererId: DELIVERER,
-    deliverer: { id: DELIVERER, user: { id: DELIVERER_USER, name: 'Saúl', phone: '+5355559999' } },
+    deliverer: { id: DELIVERER, photoUrl: null, user: { id: DELIVERER_USER, name: 'Saúl', phone: '+5355559999' } },
     registeredByUserId: null,
     registeredBy: null,
     raffleNumber: null,
@@ -310,6 +310,26 @@ describe('GET /customers/me/orders/:orderId/tracking', () => {
     });
   });
 
+  it('la foto de perfil del mensajero viaja junto a su nombre (null si no tiene)', async () => {
+    seedLocation();
+    const without = await trackingOf(ORDER_ASSIGNED);
+    expect(without.json?.data.deliverer).toEqual({ name: 'Saúl', photoUrl: null });
+
+    db.orders.set(
+      ORDER_ASSIGNED,
+      makeOrder({
+        id: ORDER_ASSIGNED,
+        deliverer: {
+          id: DELIVERER,
+          photoUrl: 'https://res.cloudinary.com/demo/saul.jpg',
+          user: { id: DELIVERER_USER, name: 'Saúl', phone: '+5355559999' },
+        },
+      }),
+    );
+    const withPhoto = await trackingOf(ORDER_ASSIGNED);
+    expect(withPhoto.json?.data.deliverer).toEqual({ name: 'Saúl', photoUrl: 'https://res.cloudinary.com/demo/saul.jpg' });
+  });
+
   it('RECOGIENDO: el seguimiento se activa y trae la hora de la etapa', async () => {
     seedLocation();
     const { json } = await trackingOf(ORDER_ASSIGNED);
@@ -331,7 +351,7 @@ describe('GET /customers/me/orders/:orderId/tracking', () => {
     const { json } = await trackingOf(ORDER_ASSIGNED);
     const raw = JSON.stringify(json?.data);
 
-    expect(Object.keys(json?.data.deliverer)).toEqual(['name']);
+    expect(Object.keys(json?.data.deliverer)).toEqual(['name', 'photoUrl']);
     expect(raw).not.toContain(DELIVERER);
     expect(raw).not.toContain(DELIVERER_USER);
     expect(raw).not.toContain('5355559999');

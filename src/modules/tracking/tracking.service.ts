@@ -23,7 +23,7 @@ export interface OrderTrackingDTO {
   // Hora del servidor: la app calcula la antigüedad de la ubicación contra ESTA hora, no contra
   // el reloj del teléfono (que puede estar mal).
   serverTime: Date;
-  deliverer: { name: string } | null;
+  deliverer: { name: string; photoUrl: string | null } | null;
   location: {
     latitude: number;
     longitude: number;
@@ -95,7 +95,10 @@ async function buildTracking(order: OrderWithRelations, now: Date): Promise<Orde
     pickingUpAt: order.pickingUpAt,
     onTheWayAt: order.onTheWayAt,
     serverTime: now,
-    deliverer: trackingActive && order.deliverer ? { name: order.deliverer.user.name } : null,
+    deliverer:
+      trackingActive && order.deliverer
+        ? { name: order.deliverer.user.name, photoUrl: order.deliverer.photoUrl ?? null }
+        : null,
     location,
     route,
     destination: {

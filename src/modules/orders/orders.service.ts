@@ -79,6 +79,8 @@ export interface OrderDTO {
   cancelledAt: Date | null;
   delivererId: string | null;
   delivererName: string | null;
+  /** Foto de perfil del mensajero (URL) o null si no tiene. */
+  delivererPhotoUrl: string | null;
   registeredByUserId: string | null;
   registeredByName: string | null;
   customerId: string | null;
@@ -115,6 +117,7 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     cancelledAt: order.cancelledAt,
     delivererId: order.delivererId,
     delivererName: order.deliverer?.user.name ?? null,
+    delivererPhotoUrl: order.deliverer?.photoUrl ?? null,
     registeredByUserId: order.registeredByUserId,
     registeredByName: order.registeredBy?.name ?? null,
     customerId: order.customerId,

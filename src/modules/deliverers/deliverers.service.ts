@@ -24,6 +24,7 @@ export interface DelivererDTO {
   joinedAt: Date;
   commissionPercentage: number | null;
   effectiveCommissionPercentage: number;
+  photoUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +34,7 @@ interface DelivererRecord {
   userId: string;
   joinedAt: Date;
   commissionPercentage: Prisma.Decimal | null;
+  photoUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
   user: {
@@ -55,6 +57,7 @@ function toDTO(record: DelivererRecord, defaultCommissionPercentage: number): De
     joinedAt: record.joinedAt,
     commissionPercentage,
     effectiveCommissionPercentage: commissionPercentage ?? defaultCommissionPercentage,
+    photoUrl: record.photoUrl ?? null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -75,7 +78,11 @@ export async function createDeliverer(input: CreateDelivererInput): Promise<Deli
       phone: input.phone,
       role: 'DELIVERER',
     },
-    { joinedAt: input.joinedAt, commissionPercentage: input.commissionPercentage },
+    {
+      joinedAt: input.joinedAt,
+      commissionPercentage: input.commissionPercentage,
+      photoUrl: input.photoUrl,
+    },
   );
 
   const config = await systemConfigService.getSystemConfig();
@@ -134,7 +141,7 @@ export async function updateDeliverer(
     id,
     existing.userId,
     { name: input.name, phone: input.phone, active: input.active },
-    { commissionPercentage: input.commissionPercentage },
+    { commissionPercentage: input.commissionPercentage, photoUrl: input.photoUrl },
   );
 
   const config = await systemConfigService.getSystemConfig();

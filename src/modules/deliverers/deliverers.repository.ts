@@ -3,7 +3,7 @@ import type { Prisma } from '../../generated/prisma/client';
 
 export function createWithUser(
   userData: Prisma.UserUncheckedCreateInput,
-  delivererData: { joinedAt?: Date; commissionPercentage?: number },
+  delivererData: { joinedAt?: Date; commissionPercentage?: number; photoUrl?: string },
 ) {
   return prisma.$transaction(async (tx) => {
     const user = await tx.user.create({ data: userData });
@@ -12,6 +12,7 @@ export function createWithUser(
         userId: user.id,
         ...(delivererData.joinedAt ? { joinedAt: delivererData.joinedAt } : {}),
         commissionPercentage: delivererData.commissionPercentage,
+        photoUrl: delivererData.photoUrl,
       },
       include: { user: true },
     });

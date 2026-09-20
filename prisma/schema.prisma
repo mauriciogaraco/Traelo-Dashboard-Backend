@@ -162,6 +162,9 @@ model Deliverer {
   user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   joinedAt             DateTime @default(now())
   commissionPercentage Decimal? @db.Decimal(5, 2)
+  // Foto de perfil (solo la URL, nunca el binario). Opcional: la app la muestra al cliente junto al
+  // nombre del mensajero cuando existe.
+  photoUrl             String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

@@ -15,6 +15,7 @@ export const createDelivererSchema = z.object({
   phone: z.string().min(6).max(30),
   joinedAt: z.coerce.date().optional(),
   commissionPercentage: z.coerce.number().min(0).max(100).optional(),
+  photoUrl: z.url('URL de foto inválida').optional(),
 });
 
 export type CreateDelivererInput = z.infer<typeof createDelivererSchema>;
@@ -24,6 +25,8 @@ export const updateDelivererSchema = z.object({
   phone: z.string().min(6).max(30).optional(),
   active: z.boolean().optional(),
   commissionPercentage: z.coerce.number().min(0).max(100).nullable().optional(),
+  // null = quitar la foto.
+  photoUrl: z.url('URL de foto inválida').nullable().optional(),
 });
 
 export type UpdateDelivererInput = z.infer<typeof updateDelivererSchema>;
