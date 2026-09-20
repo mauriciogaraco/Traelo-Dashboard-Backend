@@ -10,6 +10,7 @@ export const orderInclude = {
       items: true,
     },
   },
+  redemption: true,
 } satisfies Prisma.OrderInclude;
 
 export type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;

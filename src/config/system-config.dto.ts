@@ -8,6 +8,8 @@ export const updateSystemConfigSchema = z.object({
   raffleVideoUrl: z.url().nullable().optional(),
   // Puntos V1: cada cuántos CUP de Servicio Tráelo se da 1 punto (entero >= 1).
   pointsServiceDivisor: z.coerce.number().int().min(1).max(100000).optional(),
+  // Puntos de bienvenida por el primer pedido desde la app (0 = desactivado).
+  pointsFirstOrderBonus: z.coerce.number().int().min(0).max(100000).optional(),
 });
 
 export type UpdateSystemConfigInput = z.infer<typeof updateSystemConfigSchema>;

@@ -3,6 +3,8 @@ import { apiKeyAuth } from '../../middlewares/apiKeyAuth';
 import { publicRateLimit } from '../../middlewares/publicRateLimit';
 import { validate } from '../../middlewares/validate';
 import * as catalogController from './catalog.controller';
+import { sendOk } from '../../shared/http';
+import { getCatalogStats } from './catalog-stats.service';
 import {
   catalogBusinessIdParamSchema,
   listCatalogBusinessesQuerySchema,
@@ -28,6 +30,11 @@ catalogRouter.get(
 );
 
 catalogRouter.get('/categories', catalogController.listCategories);
+
+// Popularidad (pedidos/unidades recientes) y calificación de negocios, para ordenar la búsqueda.
+catalogRouter.get('/stats', async (_req, res) => {
+  sendOk(res, await getCatalogStats());
+});
 
 catalogRouter.get(
   '/businesses',

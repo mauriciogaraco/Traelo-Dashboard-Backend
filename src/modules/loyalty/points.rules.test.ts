@@ -3,12 +3,17 @@ import {
   buildPointsNotification,
   calculatePoints,
   expectedPointsForOrder,
+  firstOrderBonusCandidate,
   isOrderEligibleForPoints,
   type PointsOrderFacts,
   type PointsRuleConfig,
 } from './points.rules';
 
-const config: PointsRuleConfig = { divisor: 10, enabledFrom: new Date('2026-09-19T00:00:00Z') };
+const config: PointsRuleConfig = {
+  divisor: 10,
+  firstOrderBonus: 10,
+  enabledFrom: new Date('2026-09-19T00:00:00Z'),
+};
 
 const order = (overrides: Partial<PointsOrderFacts> = {}): PointsOrderFacts => ({
   status: 'COMPLETED',

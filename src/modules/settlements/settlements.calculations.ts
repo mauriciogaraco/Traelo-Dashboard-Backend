@@ -8,6 +8,10 @@ export interface OrderForSettlement {
   delivererEarning: Money;
   traeloDeliveryShare: Money;
   platformFee: Money;
+  // Canje de puntos: el mensajero cobró al cliente ESTO de menos, pero al negocio le pagó el producto
+  // completo; Tráelo lo absorbe, así que baja lo que el mensajero debe entregar. Opcional: 0/ausente
+  // en pedidos sin canje (el cálculo queda idéntico).
+  pointsDiscount?: Money;
 }
 
 export interface SettlementTotals {
@@ -38,7 +42,14 @@ export function computeSettlementTotals(orders: OrderForSettlement[]): Settlemen
     platformFeeCollected = platformFeeCollected.plus(order.platformFee);
   }
 
-  const totalToDeliver = traeloDeliveryShare.plus(platformFeeCollected);
+  let pointsDiscountAbsorbed = new Prisma.Decimal(0);
+  for (const order of orders) {
+    pointsDiscountAbsorbed = pointsDiscountAbsorbed.plus(order.pointsDiscount ?? 0);
+  }
+
+  const totalToDeliver = traeloDeliveryShare
+    .plus(platformFeeCollected)
+    .minus(pointsDiscountAbsorbed);
 
   return {
     totalDeliveries: orders.length,

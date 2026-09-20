@@ -10,6 +10,8 @@ export interface SystemConfigDTO {
   raffleVideoUrl: string | null;
   /** Puntos V1: puntos = floor(Servicio Tráelo / pointsServiceDivisor). */
   pointsServiceDivisor: number;
+  /** Bono por el primer pedido desde la app (0 = desactivado). */
+  pointsFirstOrderBonus: number;
   /** Solo cuentan los pedidos completados desde esta fecha. */
   pointsEnabledFrom: Date;
   updatedAt: Date;
@@ -20,6 +22,7 @@ function toDTO(config: {
   rafflePromoText: string | null;
   raffleVideoUrl: string | null;
   pointsServiceDivisor: number;
+  pointsFirstOrderBonus: number;
   pointsEnabledFrom: Date;
   updatedAt: Date;
 }): SystemConfigDTO {
@@ -30,6 +33,7 @@ function toDTO(config: {
     rafflePromoText: config.rafflePromoText,
     raffleVideoUrl: config.raffleVideoUrl,
     pointsServiceDivisor: config.pointsServiceDivisor,
+    pointsFirstOrderBonus: config.pointsFirstOrderBonus,
     pointsEnabledFrom: config.pointsEnabledFrom,
     updatedAt: config.updatedAt,
   };
@@ -53,6 +57,7 @@ export async function updateSystemConfig(input: UpdateSystemConfigInput): Promis
       rafflePromoText: input.rafflePromoText,
       raffleVideoUrl: input.raffleVideoUrl,
       pointsServiceDivisor: input.pointsServiceDivisor,
+      pointsFirstOrderBonus: input.pointsFirstOrderBonus,
     },
     create: {
       id: SINGLETON_ID,
@@ -60,6 +65,7 @@ export async function updateSystemConfig(input: UpdateSystemConfigInput): Promis
       rafflePromoText: input.rafflePromoText,
       raffleVideoUrl: input.raffleVideoUrl,
       pointsServiceDivisor: input.pointsServiceDivisor ?? 10,
+      pointsFirstOrderBonus: input.pointsFirstOrderBonus ?? 10,
     },
   });
 

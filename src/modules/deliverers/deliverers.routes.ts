@@ -5,6 +5,8 @@ import { validate } from '../../middlewares/validate';
 import { idParamSchema } from '../../shared/http';
 import { Role } from '../../generated/prisma/enums';
 import * as deliverersController from './deliverers.controller';
+import * as delivererLocationController from '../tracking/deliverer-location.controller';
+import { updateDelivererLocationSchema } from '../tracking/deliverer-location.dto';
 import {
   createDelivererSchema,
   listDeliverersQuerySchema,
@@ -16,6 +18,15 @@ export const deliverersRouter = Router();
 deliverersRouter.use(authenticate);
 
 deliverersRouter.get('/me', deliverersController.getMyProfile);
+
+// Última ubicación del mensajero autenticado (la app de mensajero la envía mientras tiene una
+// entrega activa). Solo DELIVERER, y sin :id en la URL: el mensajero sale siempre del token.
+deliverersRouter.post(
+  '/me/location',
+  authorize(Role.DELIVERER),
+  validate({ body: updateDelivererLocationSchema }),
+  delivererLocationController.updateMyLocation,
+);
 
 deliverersRouter.get(
   '/',

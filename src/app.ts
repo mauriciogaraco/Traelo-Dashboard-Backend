@@ -22,6 +22,7 @@ import { analyticsRouter } from './modules/analytics/analytics.routes';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { businessPortalRouter } from './modules/business-portal/business-portal.routes';
 import { systemConfigRouter } from './config/system-config.routes';
+import { rewardsAdminRouter, rewardsRouter } from './modules/loyalty/rewards.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -60,6 +61,8 @@ export function createApp(): Express {
   app.use('/api/v1/dashboard', dashboardRouter);
   app.use('/api/v1/my-business', businessPortalRouter);
   app.use('/api/v1/config', systemConfigRouter);
+  app.use('/api/v1/rewards', rewardsRouter);
+  app.use('/api/v1/loyalty/rewards', rewardsAdminRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Recurso no encontrado' });

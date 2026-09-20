@@ -14,12 +14,18 @@ import { isBusinessOpen, type BusinessOpenReason } from '../businesses/business-
 import * as customersService from './customers.service';
 import * as addressesRepository from './customer-addresses.repository';
 import * as ordersService from '../orders/orders.service';
-import type { OrderDTO, CreateOrderOptions } from '../orders/orders.service';
+import type { OrderDTO, OrderQuoteDTO, CreateOrderOptions } from '../orders/orders.service';
 import { createGuestAccessToken, hashGuestAccessToken } from '../guest-orders/guest-token';
 import type { CreateOrderInput } from '../orders/orders.dto';
 import type { OrderStatus } from '../../generated/prisma/enums';
 import { computeAppDeliveryFee } from '../orders/delivery-fee-calculator';
-import type { AppOrderBusinessInput, CheckoutOrderInput } from '../checkout/checkout.dto';
+import { RedemptionError } from '../loyalty/rewards.rules';
+import type { RedemptionRequest } from '../loyalty/rewards.service';
+import type {
+  AppOrderBusinessInput,
+  CheckoutOrderInput,
+  CheckoutQuoteInput,
+} from '../checkout/checkout.dto';
 import type { CreateAppOrderInput, ListCustomerOrdersQuery } from './customer-orders.dto';
 
 // Mensajes legibles por motivo — CartChange.reason abajo es el código machine-readable
@@ -124,6 +130,26 @@ async function resolveItemForCart(
   };
 }
 
+export interface DeliveryDestination {
+  latitude: number;
+  longitude: number;
+}
+
+// Ubicación (pin) que se copia al pedido como snapshot. Es OPCIONAL y su ausencia nunca frena un
+// pedido. `location` undefined = usar la de la dirección guardada (si tiene); null = el cliente
+// pidió explícitamente no llevar ubicación en este pedido; objeto = la de este pedido.
+export function resolveDestination(
+  location: { latitude: number; longitude: number } | null | undefined,
+  saved: { latitude: number | null; longitude: number | null } | null,
+): DeliveryDestination | null {
+  if (location === null) return null;
+  if (location) return { latitude: location.latitude, longitude: location.longitude };
+  if (saved && saved.latitude !== null && saved.longitude !== null) {
+    return { latitude: saved.latitude, longitude: saved.longitude };
+  }
+  return null;
+}
+
 interface OrderBasics {
   customerId: string | null;
   customerName: string;
@@ -131,51 +157,21 @@ interface OrderBasics {
   customerAddress: string;
   addressReference: string | undefined;
   clientRequestId: string | undefined;
+  // Pin de entrega ya resuelto (ver resolveDestination); null = sin ubicación.
+  destination: DeliveryDestination | null;
   // Solo pedidos de invitado (ver createCheckoutOrder).
   guestAccessTokenHash?: string;
+  // Canje de una recompensa (solo con cuenta): solo el id; el servidor resuelve todo lo demás.
+  redemption?: RedemptionRequest;
 }
 
-// Núcleo compartido por createAppOrder (cliente ya identificado, vía /customers/:id/orders) y
-// createCheckoutOrder (invitado o cliente, vía /checkout): validar negocios+horario, resolver
-// precios, calcular el delivery y crear el pedido. Los datos del cliente (nombre/teléfono/
-// dirección/customerId) ya vienen resueltos por el caller — es lo único que difiere entre
-// ambos flujos.
-async function buildAndCreateOrder(
-  basics: OrderBasics,
+// Valida negocios (abiertos) y productos (existen, disponibles, precio vigente) y calcula el
+// delivery. Si algo cambió, junta TODO el diff en un único CartChangedError. Lo comparten la
+// creación del pedido y la cotización, para que ambas resuelvan el carrito exactamente igual.
+async function resolveCart(
   businessGroups: AppOrderBusinessInput[],
-): Promise<OrderDTO> {
-  // Idempotencia primero, antes que cualquier otra regla: si esta request ya se procesó
-  // (mismo clientRequestId), se devuelve ese pedido tal cual — el cooldown de reenvío de
-  // abajo NO debe aplicar a la reproducción de una request que ya es "el mismo intento".
-  if (basics.clientRequestId) {
-    const existing = await ordersService.getOrderByClientRequestId(basics.clientRequestId);
-    if (existing) {
-      // El pedido ya existente debe ser de la MISMA identidad (misma cuenta, o ambos
-      // invitados): si no, el clientRequestId no puede usarse para leer un pedido ajeno.
-      if (existing.customerId !== basics.customerId) {
-        throw new ConflictError(
-          'Ese identificador de solicitud ya fue usado por otro pedido',
-          'IDEMPOTENCY_KEY_CONFLICT',
-        );
-      }
-      return existing;
-    }
-  }
-
-  const businessIds = businessGroups.map((group) => group.businessId);
-  if (new Set(businessIds).size !== businessIds.length) {
-    throw new BadRequestError(
-      'No se puede repetir el mismo negocio en un pedido',
-      'DUPLICATE_BUSINESS',
-    );
-  }
-
-  const now = new Date();
-
-  // Antispam: bloquea un pedido NUEVO (distinto clientRequestId) mientras el cliente todavía
-  // tiene uno reciente sin atender. Ver orders.service.ts para el detalle de cuándo se libera.
-  await ordersService.assertNoRecentPendingAppOrder(basics.customerPhone, now);
-
+  now: Date,
+): Promise<{ businesses: CreateOrderInput['businesses']; deliveryFee: number }> {
   const changes: CartChange[] = [];
   const deliveryFeeBases: Parameters<typeof computeAppDeliveryFee>[0] = [];
   const businesses: CreateOrderInput['businesses'] = [];
@@ -225,7 +221,57 @@ async function buildAndCreateOrder(
 
   const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now));
 
-  const orderOptions: CreateOrderOptions = { guestAccessTokenHash: basics.guestAccessTokenHash };
+  return { businesses, deliveryFee };
+}
+
+// Núcleo compartido por createAppOrder (cliente ya identificado, vía /customers/:id/orders) y
+// createCheckoutOrder (invitado o cliente, vía /checkout): validar negocios+horario, resolver
+// precios, calcular el delivery y crear el pedido. Los datos del cliente (nombre/teléfono/
+// dirección/customerId) ya vienen resueltos por el caller — es lo único que difiere entre
+// ambos flujos.
+async function buildAndCreateOrder(
+  basics: OrderBasics,
+  businessGroups: AppOrderBusinessInput[],
+): Promise<OrderDTO> {
+  // Idempotencia primero, antes que cualquier otra regla: si esta request ya se procesó
+  // (mismo clientRequestId), se devuelve ese pedido tal cual — el cooldown de reenvío de
+  // abajo NO debe aplicar a la reproducción de una request que ya es "el mismo intento".
+  if (basics.clientRequestId) {
+    const existing = await ordersService.getOrderByClientRequestId(basics.clientRequestId);
+    if (existing) {
+      // El pedido ya existente debe ser de la MISMA identidad (misma cuenta, o ambos
+      // invitados): si no, el clientRequestId no puede usarse para leer un pedido ajeno.
+      if (existing.customerId !== basics.customerId) {
+        throw new ConflictError(
+          'Ese identificador de solicitud ya fue usado por otro pedido',
+          'IDEMPOTENCY_KEY_CONFLICT',
+        );
+      }
+      return existing;
+    }
+  }
+
+  const businessIds = businessGroups.map((group) => group.businessId);
+  if (new Set(businessIds).size !== businessIds.length) {
+    throw new BadRequestError(
+      'No se puede repetir el mismo negocio en un pedido',
+      'DUPLICATE_BUSINESS',
+    );
+  }
+
+  const now = new Date();
+
+  // Antispam: bloquea un pedido NUEVO (distinto clientRequestId) mientras el cliente todavía
+  // tiene uno reciente sin atender. Ver orders.service.ts para el detalle de cuándo se libera.
+  await ordersService.assertNoRecentPendingAppOrder(basics.customerPhone, now);
+
+  const { businesses, deliveryFee } = await resolveCart(businessGroups, now);
+
+  const orderOptions: CreateOrderOptions = {
+    guestAccessTokenHash: basics.guestAccessTokenHash,
+    destination: basics.destination,
+    redemption: basics.redemption,
+  };
 
   return ordersService.createOrder(
     {
@@ -252,6 +298,7 @@ export async function createAppOrder(
 
   let customerAddress: string;
   let addressReference: string | undefined;
+  let savedLocation: { latitude: number | null; longitude: number | null } | null = null;
   if (input.addressId) {
     const address = await addressesRepository.findByIdForCustomer(input.addressId, customerId);
     if (!address) {
@@ -259,6 +306,7 @@ export async function createAppOrder(
     }
     customerAddress = address.address;
     addressReference = address.reference ?? undefined;
+    savedLocation = address;
   } else {
     // El refine del DTO ya garantiza que address venga si no vino addressId.
     customerAddress = input.address as string;
@@ -273,6 +321,7 @@ export async function createAppOrder(
       customerAddress,
       addressReference,
       clientRequestId: input.clientRequestId,
+      destination: resolveDestination(input.location, savedLocation),
     },
     input.businesses,
   );
@@ -300,6 +349,7 @@ export async function createCheckoutOrder(
 
     let customerAddress: string;
     let addressReference: string | undefined;
+    let savedLocation: { latitude: number | null; longitude: number | null } | null = null;
     if (input.addressId) {
       const address = await addressesRepository.findByIdForCustomer(input.addressId, customer.id);
       if (!address) {
@@ -307,6 +357,7 @@ export async function createCheckoutOrder(
       }
       customerAddress = address.address;
       addressReference = address.reference ?? undefined;
+      savedLocation = address;
     } else {
       // El refine del DTO garantiza address si no vino addressId.
       customerAddress = input.address as string;
@@ -321,8 +372,18 @@ export async function createCheckoutOrder(
         customerAddress,
         addressReference,
         clientRequestId: input.clientRequestId,
+        destination: resolveDestination(input.location, savedLocation),
+        redemption: input.redemption,
       },
       input.businesses,
+    );
+  }
+
+  // Sin cuenta no hay puntos: un invitado no puede canjear (se rechaza antes de crear nada).
+  if (input.redemption) {
+    throw new RedemptionError(
+      'REDEMPTION_REQUIRES_LOGIN',
+      'Inicia sesión para usar tus puntos',
     );
   }
 
@@ -353,6 +414,8 @@ export async function createCheckoutOrder(
       customerAddress: input.address as string,
       addressReference: input.addressReference,
       clientRequestId: input.clientRequestId,
+      // Un invitado no tiene direcciones guardadas: el pin (si lo puso) viene en este pedido.
+      destination: resolveDestination(input.location, null),
       guestAccessTokenHash: hashGuestAccessToken(guestAccessToken),
     },
     input.businesses,
@@ -515,4 +578,20 @@ export async function repeatOrder(
   );
 
   return { originalOrderId: order.id, businesses, hasChanges };
+}
+
+/**
+ * Cotización de solo lectura del carrito (sin crear ni descontar nada): precios vigentes,
+ * delivery, Servicio Tráelo, canje de puntos y total, calculados por el servidor con las mismas
+ * reglas que el pedido. La app la muestra para confirmar; NO es una reserva de nada.
+ */
+export async function quoteCheckout(
+  input: CheckoutQuoteInput,
+  authenticatedCustomerId?: string,
+): Promise<OrderQuoteDTO> {
+  const { businesses, deliveryFee } = await resolveCart(input.businesses, new Date());
+  return ordersService.quoteOrder(
+    { businesses, deliveryFee, customerId: authenticatedCustomerId },
+    { redemption: input.redemption },
+  );
 }

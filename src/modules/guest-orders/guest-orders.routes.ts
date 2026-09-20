@@ -6,6 +6,7 @@ import { validate } from '../../middlewares/validate';
 import { sendOk } from '../../shared/http';
 import * as ordersService from '../orders/orders.service';
 import { toOrderStatusDTO } from '../customers/customer-orders.service';
+import * as trackingService from '../tracking/tracking.service';
 import { orderReviewsRouter } from '../reviews/reviews.routes';
 import { authenticateGuestOrder } from './authenticate-guest-order';
 
@@ -32,6 +33,10 @@ guestOrdersRouter.get('/:orderId', async (req, res) => {
 guestOrdersRouter.get('/:orderId/status', async (req, res) => {
   const order = await ordersService.getOrderById(req.guestOrder?.id as string);
   sendOk(res, toOrderStatusDTO(order));
+});
+
+guestOrdersRouter.get('/:orderId/tracking', async (req, res) => {
+  sendOk(res, await trackingService.getGuestOrderTracking(req.guestOrder?.id as string));
 });
 
 guestOrdersRouter.use('/:orderId/reviews', orderReviewsRouter);

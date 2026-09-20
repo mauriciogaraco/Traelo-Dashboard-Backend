@@ -4,13 +4,14 @@
 -- (DEFAULT now() rellena la fila existente) y solo cuentan los pedidos completados desde entonces.
 
 -- CreateEnum
-CREATE TYPE "PointsTransactionType" AS ENUM ('ORDER_COMPLETED', 'ORDER_ADJUSTMENT');
+CREATE TYPE "PointsTransactionType" AS ENUM ('ORDER_COMPLETED', 'ORDER_ADJUSTMENT', 'FIRST_ORDER_BONUS');
 
 -- AlterTable
 ALTER TABLE "customers" ADD COLUMN "pointsBalance" INTEGER NOT NULL DEFAULT 0;
 
 -- AlterTable
 ALTER TABLE "system_config" ADD COLUMN "pointsServiceDivisor" INTEGER NOT NULL DEFAULT 10,
+ADD COLUMN "pointsFirstOrderBonus" INTEGER NOT NULL DEFAULT 10,
 ADD COLUMN "pointsEnabledFrom" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 -- CreateTable
@@ -51,3 +52,4 @@ ALTER TABLE "points_transactions" ADD CONSTRAINT "points_transactions_orderId_fk
 ALTER TABLE "points_transactions" ADD CONSTRAINT "points_transactions_points_nonzero" CHECK ("points" <> 0);
 ALTER TABLE "points_transactions" ADD CONSTRAINT "points_transactions_divisor_positive" CHECK ("divisor" >= 1);
 ALTER TABLE "system_config" ADD CONSTRAINT "system_config_points_divisor_positive" CHECK ("pointsServiceDivisor" >= 1);
+ALTER TABLE "system_config" ADD CONSTRAINT "system_config_points_first_bonus_nonnegative" CHECK ("pointsFirstOrderBonus" >= 0);
