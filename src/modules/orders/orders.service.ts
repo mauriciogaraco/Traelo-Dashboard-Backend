@@ -598,10 +598,10 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   if (!existing) {
     throw new NotFoundError('Pedido no encontrado');
   }
-  if (existing.status === 'CANCELLED') {
-    throw new ConflictError('No se puede editar un pedido CANCELLED');
-  }
-
+  // Un pedido CANCELLED también se puede editar (corregir datos del cliente, productos o montos):
+  // sigue CANCELLED, no genera puntos ni entra a cuadres (solo los COMPLETED lo hacen) y el canje
+  // de puntos, si lo tenía, ya fue devuelto (REFUNDED), así que no bloquea el cambio de productos.
+  //
   // Un pedido COMPLETED sí se puede editar (p.ej. corregir dirección o productos después de
   // entregado), pero si sus productos/montos ya se usaron para cerrar un cuadre, tocarlos
   // desincronizaría esa liquidación ya cerrada — eso queda bloqueado. Los datos del cliente
