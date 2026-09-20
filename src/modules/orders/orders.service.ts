@@ -16,6 +16,8 @@ import * as rewardsRepository from '../loyalty/rewards.repository';
 import * as rewardsService from '../loyalty/rewards.service';
 import type { RedemptionPlan } from '../loyalty/rewards.rules';
 import { releaseLocationIfIdleSafely } from '../tracking/deliverer-location.service';
+import { sendPushToCustomer } from '../../shared/push/expo-push';
+import { buildStageNotification, type DeliveryStage } from './order-stage-notifications';
 import * as ordersRepository from './orders.repository';
 import type { OrderWithRelations } from './orders.repository';
 import * as calc from './orders.calculations';
@@ -24,6 +26,7 @@ import type {
   CreateOrderInput,
   ListOrdersQuery,
   UpdateOrderInput,
+  UpdateOrderStageInput,
   UpdateOrderStatusInput,
 } from './orders.dto';
 
@@ -70,6 +73,8 @@ export interface OrderDTO {
   status: OrderStatus;
   orderDate: Date;
   assignedAt: Date | null;
+  pickingUpAt: Date | null;
+  onTheWayAt: Date | null;
   completedAt: Date | null;
   cancelledAt: Date | null;
   delivererId: string | null;
@@ -104,6 +109,8 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     status: order.status,
     orderDate: order.orderDate,
     assignedAt: order.assignedAt,
+    pickingUpAt: order.pickingUpAt,
+    onTheWayAt: order.onTheWayAt,
     completedAt: order.completedAt,
     cancelledAt: order.cancelledAt,
     delivererId: order.delivererId,
@@ -774,12 +781,69 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
     deliverer: { connect: { id: input.delivererId } },
     status: 'ASSIGNED',
     assignedAt: existing.assignedAt ?? new Date(),
+    ...(existing.delivererId !== input.delivererId ? { pickingUpAt: null, onTheWayAt: null } : {}),
     traeloEarning: new Prisma.Decimal(existing.platformFee).plus(traeloDeliveryShare),
     traeloDeliveryShare,
     delivererEarning: delivererShare,
   });
 
   return toDTO(order);
+}
+
+/**
+ * Etapa del reparto de un pedido ASSIGNED: "Recogiendo" (el mensajero va por el pedido) y luego
+ * "En camino" (ya lo lleva al cliente). Solo avanza, en orden y una vez; repetir la misma etapa no
+ * hace nada (idempotente). El estado del pedido sigue siendo ASSIGNED. A partir de PICKING_UP el
+ * cliente ve el seguimiento en vivo. Un mensajero solo puede mover SUS pedidos (scopeDelivererId).
+ */
+export async function updateOrderStage(
+  id: string,
+  input: UpdateOrderStageInput,
+  scopeDelivererId?: string,
+): Promise<OrderDTO> {
+  const existing = await ordersRepository.findById(id);
+  if (!existing || (scopeDelivererId !== undefined && existing.delivererId !== scopeDelivererId)) {
+    // Un pedido ajeno se ve igual que uno inexistente para el mensajero.
+    throw new NotFoundError('Pedido no encontrado');
+  }
+  if (existing.status !== 'ASSIGNED' || !existing.delivererId) {
+    throw new ConflictError(
+      'Solo un pedido ASSIGNED con mensajero puede cambiar de etapa',
+      'ORDER_NOT_ASSIGNED',
+    );
+  }
+
+  if (input.stage === 'PICKING_UP') {
+    if (existing.pickingUpAt) return toDTO(existing);
+    if (existing.onTheWayAt) {
+      throw new ConflictError('El pedido ya va en camino', 'STAGE_OUT_OF_ORDER');
+    }
+    const order = await ordersRepository.update(id, { pickingUpAt: new Date() });
+    notifyStageSafely('PICKING_UP', order);
+    return toDTO(order);
+  }
+
+  // ON_THE_WAY
+  if (existing.onTheWayAt) return toDTO(existing);
+  if (!existing.pickingUpAt) {
+    throw new ConflictError(
+      'Primero hay que marcar "Recogiendo" antes de "En camino"',
+      'STAGE_OUT_OF_ORDER',
+    );
+  }
+  const order = await ordersRepository.update(id, { onTheWayAt: new Date() });
+  notifyStageSafely('ON_THE_WAY', order);
+  return toDTO(order);
+}
+
+// Push al cliente (solo si tiene cuenta y dispositivo). Sin esperar a Expo y sin poder fallar:
+// sendPushToCustomer registra sus errores y nunca lanza, así que la etapa ya guardada no se afecta.
+function notifyStageSafely(
+  stage: DeliveryStage,
+  order: { id: string; orderNumber: number; customerId: string | null },
+): void {
+  if (!order.customerId) return;
+  void sendPushToCustomer(order.customerId, buildStageNotification(stage, order));
 }
 
 export async function updateOrderStatus(

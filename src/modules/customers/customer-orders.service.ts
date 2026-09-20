@@ -451,6 +451,8 @@ export interface OrderStatusDTO {
   status: OrderStatus;
   updatedAt: Date;
   assignedAt: Date | null;
+  pickingUpAt: Date | null;
+  onTheWayAt: Date | null;
   completedAt: Date | null;
   cancelledAt: Date | null;
   delivererName: string | null;
@@ -462,6 +464,8 @@ export function toOrderStatusDTO(order: OrderDTO): OrderStatusDTO {
     status: order.status,
     updatedAt: order.updatedAt,
     assignedAt: order.assignedAt,
+    pickingUpAt: order.pickingUpAt,
+    onTheWayAt: order.onTheWayAt,
     completedAt: order.completedAt,
     cancelledAt: order.cancelledAt,
     delivererName: order.delivererName,

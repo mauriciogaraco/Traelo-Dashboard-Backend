@@ -25,6 +25,11 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),
   CLOUDINARY_API_KEY: z.string().min(1).optional(),
   CLOUDINARY_API_SECRET: z.string().min(1).optional(),
+  // Motor de rutas (compatible con la API de OSRM) para dibujar el recorrido del mensajero. Por
+  // defecto el servidor PÚBLICO de demostración de OSRM: sirve para probar, NO para producción
+  // (sin garantías, uso limitado y le llegan las posiciones del mensajero). Para producción,
+  // apuntar a un OSRM propio con el mapa de Cuba.
+  ROUTING_BASE_URL: z.string().url().default('https://router.project-osrm.org'),
 });
 
 const parsed = envSchema.safeParse(process.env);

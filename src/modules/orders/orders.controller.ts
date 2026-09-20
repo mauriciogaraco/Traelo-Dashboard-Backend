@@ -10,6 +10,7 @@ import type {
   CreateOrderInput,
   ListOrdersQuery,
   UpdateOrderInput,
+  UpdateOrderStageInput,
   UpdateOrderStatusInput,
 } from './orders.dto';
 
@@ -71,4 +72,10 @@ export async function bulkCompleteOrders(req: Request, res: Response): Promise<v
   const { ids } = req.body as BulkCompleteOrdersInput;
   const result = await ordersService.bulkCompleteOrders(ids);
   sendOk(res, result);
+}
+
+export async function updateOrderStage(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  const scopeDelivererId = await resolveDelivererScope(req);
+  sendOk(res, await ordersService.updateOrderStage(id, req.body as UpdateOrderStageInput, scopeDelivererId));
 }

@@ -573,6 +573,11 @@ model Order {
   source           OrderSource @default(MANUAL)
   orderDate        DateTime    @default(now())
   assignedAt       DateTime?
+  // Etapas del reparto mientras el pedido está ASSIGNED (el estado no cambia): el mensajero va por el
+  // pedido (pickingUpAt) y ya lo lleva al cliente (onTheWayAt). null = todavía no. El cliente ve el
+  // seguimiento en vivo a partir de pickingUpAt.
+  pickingUpAt      DateTime?
+  onTheWayAt       DateTime?
   completedAt      DateTime?
   cancelledAt      DateTime?
 

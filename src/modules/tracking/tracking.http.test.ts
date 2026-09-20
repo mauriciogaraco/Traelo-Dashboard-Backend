@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from '../../config/env';
 import { errorHandler } from '../../middlewares/errorHandler';
 import { Prisma } from '../../generated/prisma/client';
@@ -16,6 +16,7 @@ import { guestOrdersRouter } from '../guest-orders/guest-orders.routes';
 import { deliverersRouter } from '../deliverers/deliverers.routes';
 import { releaseLocationIfIdleSafely } from './deliverer-location.service';
 import { LOCATION_MAX_AGE_MS } from './tracking.constants';
+import { resetRouteCache, setRouteProvider } from '../routing/routing.service';
 
 vi.mock('../../middlewares/apiKeyAuth', () => ({
   apiKeyAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -134,6 +135,8 @@ function makeOrder(overrides: Row): Row {
     source: 'APP',
     orderDate: now,
     assignedAt: now,
+    pickingUpAt: now,
+    onTheWayAt: null,
     completedAt: null,
     cancelledAt: null,
     customerId: ME,
@@ -241,6 +244,7 @@ beforeEach(() => {
       delivererId: null,
       deliverer: null,
       assignedAt: null,
+      pickingUpAt: null,
     }),
   );
   db.orders.set(
@@ -284,6 +288,42 @@ describe('GET /customers/me/orders/:orderId/tracking', () => {
     });
     expect(typeof json?.data.serverTime).toBe('string');
     expect(typeof json?.data.location.updatedAt).toBe('string');
+  });
+
+  it('CONFIRMADO (mensajero asignado, todavía no va por el pedido): sin seguimiento, ubicación ni ruta', async () => {
+    seedLocation();
+    db.orders.set(
+      ORDER_ASSIGNED,
+      makeOrder({ id: ORDER_ASSIGNED, pickingUpAt: null, destinationLatitude: 22.79, destinationLongitude: -82.51 }),
+    );
+    const { status, json } = await trackingOf(ORDER_ASSIGNED);
+
+    expect(status).toBe(200);
+    expect(json?.data).toMatchObject({
+      status: 'ASSIGNED',
+      trackingActive: false,
+      pickingUpAt: null,
+      onTheWayAt: null,
+      deliverer: null,
+      location: null,
+      route: null,
+    });
+  });
+
+  it('RECOGIENDO: el seguimiento se activa y trae la hora de la etapa', async () => {
+    seedLocation();
+    const { json } = await trackingOf(ORDER_ASSIGNED);
+    expect(json?.data.trackingActive).toBe(true);
+    expect(typeof json?.data.pickingUpAt).toBe('string');
+    expect(json?.data.onTheWayAt).toBeNull();
+  });
+
+  it('EN CAMINO: sigue activo y trae ambas horas', async () => {
+    seedLocation();
+    db.orders.set(ORDER_ASSIGNED, makeOrder({ id: ORDER_ASSIGNED, onTheWayAt: new Date() }));
+    const { json } = await trackingOf(ORDER_ASSIGNED);
+    expect(json?.data.trackingActive).toBe(true);
+    expect(typeof json?.data.onTheWayAt).toBe('string');
   });
 
   it('la respuesta no expone datos innecesarios (id/teléfono del mensajero, finanzas, otros pedidos)', async () => {
@@ -575,5 +615,145 @@ describe('releaseLocationIfIdleSafely (limpieza al terminar un pedido)', () => {
     seedLocation();
     await releaseLocationIfIdleSafely(null);
     expect(db.locations.has(DELIVERER)).toBe(true);
+  });
+});
+
+describe('ruta del mensajero al destino en el tracking', () => {
+  const ROUTE = {
+    coordinates: [
+      { latitude: 22.8066, longitude: -82.513 },
+      { latitude: 22.7958, longitude: -82.5065 },
+    ],
+    distanceMeters: 1797,
+    durationSeconds: 190,
+  };
+  const getRoute = vi.fn();
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const withPin = (overrides: Row = {}) =>
+    db.orders.set(
+      ORDER_ASSIGNED,
+      makeOrder({
+        id: ORDER_ASSIGNED,
+        destinationLatitude: 22.7958,
+        destinationLongitude: -82.5065,
+        ...overrides,
+      }),
+    );
+
+  beforeEach(() => {
+    resetRouteCache();
+    getRoute.mockReset();
+    getRoute.mockResolvedValue(ROUTE);
+    setRouteProvider({ getRoute });
+  });
+
+  afterEach(() => {
+    setRouteProvider(null);
+  });
+
+  it('con pin de destino y mensajero visible: la 1.ª consulta responde sin esperar al motor y la siguiente trae la ruta', async () => {
+    withPin();
+    seedLocation();
+
+    const first = await trackingOf(ORDER_ASSIGNED);
+    expect(first.status).toBe(200);
+    expect(first.json?.data.route).toBeNull();
+    expect(getRoute).toHaveBeenCalledTimes(1);
+    expect(getRoute).toHaveBeenCalledWith(
+      { latitude: 22.7958, longitude: -82.5065 },
+      { latitude: 22.7958, longitude: -82.5065 },
+    );
+
+    await settle();
+    const second = await trackingOf(ORDER_ASSIGNED);
+    expect(second.json?.data.route).toMatchObject({
+      distanceMeters: 1797,
+      coordinates: ROUTE.coordinates,
+    });
+    expect(typeof second.json?.data.route.computedAt).toBe('string');
+    expect(getRoute).toHaveBeenCalledTimes(1); // la segunda salió de la caché
+  });
+
+  it('la ruta no incluye la duración (no hay ETA) ni datos internos', async () => {
+    withPin();
+    seedLocation();
+    await trackingOf(ORDER_ASSIGNED);
+    await settle();
+    const { json } = await trackingOf(ORDER_ASSIGNED);
+
+    expect(Object.keys(json?.data.route).sort()).toEqual([
+      'computedAt',
+      'coordinates',
+      'distanceMeters',
+    ]);
+    expect(JSON.stringify(json)).not.toContain('durationSeconds');
+  });
+
+  it('sin pin de destino no hay ruta y ni siquiera se consulta al motor', async () => {
+    seedLocation();
+    await trackingOf(ORDER_ASSIGNED);
+    await settle();
+    const { json } = await trackingOf(ORDER_ASSIGNED);
+
+    expect(json?.data.route).toBeNull();
+    expect(getRoute).not.toHaveBeenCalled();
+  });
+
+  it('sin ubicación del mensajero no hay desde dónde trazar: sin ruta y sin consulta', async () => {
+    withPin();
+    const { json } = await trackingOf(ORDER_ASSIGNED);
+    expect(json?.data.route).toBeNull();
+    expect(getRoute).not.toHaveBeenCalled();
+  });
+
+  it('pedido entregado: sin ruta y sin consulta al motor', async () => {
+    seedLocation();
+    db.orders.set(
+      ORDER_COMPLETED,
+      makeOrder({
+        id: ORDER_COMPLETED,
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        destinationLatitude: 22.79,
+        destinationLongitude: -82.5,
+      }),
+    );
+    const { json } = await trackingOf(ORDER_COMPLETED);
+    expect(json?.data.route).toBeNull();
+    expect(getRoute).not.toHaveBeenCalled();
+  });
+
+  it('si el motor de rutas falla, el seguimiento responde 200 igual y solo falta la ruta', async () => {
+    getRoute.mockRejectedValue(new Error('motor caído'));
+    withPin();
+    seedLocation();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { status, json } = await trackingOf(ORDER_ASSIGNED);
+      expect(status).toBe(200);
+      expect(json?.data).toMatchObject({
+        trackingActive: true,
+        deliverer: { name: 'Saúl' },
+        route: null,
+      });
+      expect(json?.data.location).not.toBeNull();
+      await settle();
+    }
+  });
+
+  it('un cliente sin acceso al pedido (403) no dispara ningún cálculo de ruta', async () => {
+    db.orders.set(
+      ORDER_OTHERS,
+      makeOrder({
+        id: ORDER_OTHERS,
+        customerId: OTHER,
+        destinationLatitude: 22.79,
+        destinationLongitude: -82.5,
+      }),
+    );
+    seedLocation();
+    const { status } = await trackingOf(ORDER_OTHERS);
+    expect(status).toBe(403);
+    expect(getRoute).not.toHaveBeenCalled();
   });
 });

@@ -94,3 +94,11 @@ export const listOrdersQuerySchema = paginationQuerySchema.extend({
 });
 
 export type ListOrdersQuery = z.infer<typeof listOrdersQuerySchema>;
+
+// Etapas del reparto mientras el pedido está ASSIGNED: el mensajero va a recoger el pedido (PICKING_UP)
+// y luego ya lo lleva al cliente (ON_THE_WAY). El estado del pedido no cambia.
+export const updateOrderStageSchema = z.object({
+  stage: z.enum(['PICKING_UP', 'ON_THE_WAY']),
+});
+
+export type UpdateOrderStageInput = z.infer<typeof updateOrderStageSchema>;

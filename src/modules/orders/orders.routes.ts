@@ -11,6 +11,7 @@ import {
   createOrderSchema,
   listOrdersQuerySchema,
   updateOrderSchema,
+  updateOrderStageSchema,
   updateOrderStatusSchema,
 } from './orders.dto';
 
@@ -72,4 +73,12 @@ ordersRouter.patch(
   authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),
   validate({ params: idParamSchema, body: updateOrderStatusSchema }),
   ordersController.updateOrderStatus,
+);
+
+// Etapa del reparto (recogiendo / en camino). El mensajero mueve SOLO sus pedidos; el staff, cualquiera.
+ordersRouter.patch(
+  '/:id/stage',
+  authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE, Role.DELIVERER),
+  validate({ params: idParamSchema, body: updateOrderStageSchema }),
+  ordersController.updateOrderStage,
 );
