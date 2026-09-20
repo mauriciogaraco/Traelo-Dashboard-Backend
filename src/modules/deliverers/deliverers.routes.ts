@@ -28,6 +28,14 @@ deliverersRouter.post(
   delivererLocationController.updateMyLocation,
 );
 
+// DELIVERER, exclusivo: "reiniciar historial" — deja de ver en su Historial los pedidos
+// entregados/cancelados de antes de ahora. Sin body. Ver deliverersService.resetDelivererHistory.
+deliverersRouter.patch(
+  '/me/history-reset',
+  authorize(Role.DELIVERER),
+  deliverersController.resetMyHistory,
+);
+
 deliverersRouter.get(
   '/',
   authorize(Role.OWNER, Role.ADMIN, Role.EMPLOYEE),

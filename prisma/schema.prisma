@@ -168,6 +168,22 @@ model Deliverer {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
+  // Cola de despacho automático (app móvil): null = no está en línea, no recibe pedidos
+  // nuevos. No-null = en línea, y el valor es la posición de turno — el pedido nuevo se le
+  // ofrece al Deliverer en línea con el queuedAt más antiguo (el que lleva más tiempo
+  // esperando), y al asignarle uno se le vuelve a poner queuedAt = ahora (pasa al final de la
+  // cola). Activarse (null -> ahora) también deja a ese mensajero al final: su timestamp fresco
+  // es, por construcción, posterior al de cualquiera que ya haya recibido un pedido antes.
+  // Distinto de `user.active` (cuenta habilitada/dada de baja por el staff, administrativo).
+  queuedAt DateTime?
+
+  // "Reiniciar historial" (app móvil): fecha desde la que el mensajero quiere ver su propio
+  // historial de entregados/cancelados. Es puramente de visualización — nunca borra ni oculta
+  // pedidos para el staff/dashboard/cuadres, solo filtra la consulta cuando el que pregunta es
+  // el propio DELIVERER (ver ordersService.listOrders, scopeDelivererId). null = sin filtrar,
+  // ve todo su historial completo.
+  historyResetAt DateTime?
+
   assignedOrders Order[]      @relation("OrderDeliverer")
   settlements    Settlement[]
   reviews        DelivererReview[]

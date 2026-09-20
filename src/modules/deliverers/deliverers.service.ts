@@ -163,3 +163,20 @@ export async function deactivateDeliverer(id: string): Promise<DelivererDTO> {
   const config = await systemConfigService.getSystemConfig();
   return toDTO(updated, config.defaultDelivererCommissionPercentage);
 }
+
+// "Reiniciar historial" (app móvil): el mensajero decide que ya no quiere ver en su Historial
+// los pedidos entregados/cancelados de antes de ahora. Puramente de visualización — nunca
+// borra ni modifica los pedidos en sí, ni afecta lo que ve el staff/dashboard/cuadres (ver
+// ordersService.listOrders, que solo aplica este filtro cuando el que pregunta es el propio
+// DELIVERER). Volver a poner `historyResetAt` en el pasado no es posible desde acá: cada
+// reinicio solo puede avanzar la fecha, nunca retroceder ni "deshacer" un reinicio anterior.
+export async function resetDelivererHistory(id: string): Promise<DelivererDTO> {
+  const existing = await deliverersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  const updated = await deliverersRepository.setHistoryResetAt(id, new Date());
+  const config = await systemConfigService.getSystemConfig();
+  return toDTO(updated, config.defaultDelivererCommissionPercentage);
+}

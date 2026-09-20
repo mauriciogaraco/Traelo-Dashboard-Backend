@@ -565,6 +565,19 @@ export async function listOrders(
       ? { from: query.from ?? new Date(0), to: query.to ?? new Date() }
       : null;
 
+  // "Reiniciar historial" (app móvil): solo aplica cuando el propio DELIVERER pregunta por su
+  // Historial (COMPLETED/CANCELLED) — nunca al staff/dashboard/cuadres, que siguen viendo el
+  // historial completo sin importar qué haya reiniciado cualquier mensajero. Es un filtro de
+  // visualización, no borra ni oculta el pedido para nadie más.
+  let historyResetWhere: Prisma.OrderWhereInput = {};
+  if (scopeDelivererId && (query.status === 'COMPLETED' || query.status === 'CANCELLED')) {
+    const deliverer = await deliverersRepository.findById(scopeDelivererId);
+    if (deliverer?.historyResetAt) {
+      const dateField = query.status === 'COMPLETED' ? 'completedAt' : 'cancelledAt';
+      historyResetWhere = { [dateField]: { gte: deliverer.historyResetAt } };
+    }
+  }
+
   const where: Prisma.OrderWhereInput = {
     ...(query.status ? { status: query.status } : {}),
     ...(query.delivererId ? { delivererId: query.delivererId } : {}),
@@ -573,6 +586,7 @@ export async function listOrders(
     ...(dateRange ? { orderDate: { gte: dateRange.from, lte: dateRange.to } } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
     ...(scopeCustomerId ? { customerId: scopeCustomerId } : {}),
+    ...historyResetWhere,
   };
 
   const { skip, take } = toSkipTake(query);

@@ -28,6 +28,16 @@ export async function getMyProfile(req: Request, res: Response): Promise<void> {
   sendOk(res, deliverer);
 }
 
+export async function resetMyHistory(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const me = await deliverersService.getDelivererByUserId(req.user.sub);
+  const deliverer = await deliverersService.resetDelivererHistory(me.id);
+  sendOk(res, deliverer);
+}
+
+
 export async function getDeliverer(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as IdParam;
   const deliverer = await deliverersService.getDelivererById(id);

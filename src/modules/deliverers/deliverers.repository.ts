@@ -53,3 +53,12 @@ export function updateWithUser(
     return tx.deliverer.findUniqueOrThrow({ where: { id: delivererId }, include: { user: true } });
   });
 }
+
+// "Reiniciar historial" (app móvil) — ver el comentario en el modelo Deliverer (schema.prisma).
+export function setHistoryResetAt(delivererId: string, historyResetAt: Date) {
+  return prisma.deliverer.update({
+    where: { id: delivererId },
+    data: { historyResetAt },
+    include: { user: true },
+  });
+}
