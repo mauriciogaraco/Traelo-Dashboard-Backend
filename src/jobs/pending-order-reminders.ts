@@ -2,23 +2,22 @@ import { logger } from '../shared/logger';
 import { notifyDeliverer } from '../shared/push';
 import * as ordersRepository from '../modules/orders/orders.repository';
 
-// "Margen prudente" pedido explícitamente por el negocio (app móvil, mensajero): un mensajero
-// con un pedido por aceptar/confirmar recibe como mucho un recordatorio cada
-// PENDING_ORDER_REMINDER_INTERVAL_MS, nunca uno por cada corrida del job (Order.lastReminderPushAt
-// es lo que hace cumplir esto). El primero tampoco sale de inmediato: se espera
+// Recordatorio de "tenés un pedido por aceptar/confirmar" — UNA SOLA VEZ por pedido, nunca se
+// repite (Order.lastReminderPushAt, una vez seteado, lo saca para siempre de los candidatos: ver
+// ordersRepository.findPendingReminderCandidates). No sale de inmediato: se espera
 // PENDING_ORDER_REMINDER_INITIAL_DELAY_MS desde que el pedido entró en ese estado, para no
-// interrumpir a alguien que todavía está mirando la pantalla decidiendo.
+// interrumpir a alguien que todavía está mirando la pantalla decidiendo. Esto es solo un aviso —
+// a diferencia de declineOrder, nunca le quita el pedido a nadie (ver assignOrder: cuando lo
+// asigna el staff, acceptedAt queda seteado de una, así que ni el mensajero puede declinarlo).
 export const PENDING_ORDER_REMINDER_INITIAL_DELAY_MS = 3 * 60_000; // 3 min
-export const PENDING_ORDER_REMINDER_INTERVAL_MS = 10 * 60_000; // 10 min
-// Cada cuánto corre el job: más seguido que el margen (para no atrasarse mucho en detectar que
-// ya se puede volver a avisar), nunca tan seguido como para que el margen deje de sentirse.
+// Cada cuánto corre el job: chico para no tardar mucho en detectar que un pedido ya cumplió el
+// delay inicial, pero cada pedido solo recibe UN recordatorio en toda su vida.
 const JOB_INTERVAL_MS = 2 * 60_000;
 
 export async function checkPendingOrderReminders(now: Date = new Date()): Promise<void> {
-  const reminderCutoff = new Date(now.getTime() - PENDING_ORDER_REMINDER_INTERVAL_MS);
   const initialDelayCutoff = new Date(now.getTime() - PENDING_ORDER_REMINDER_INITIAL_DELAY_MS);
 
-  const candidates = await ordersRepository.findPendingReminderCandidates(reminderCutoff);
+  const candidates = await ordersRepository.findPendingReminderCandidates();
 
   for (const order of candidates) {
     if (!order.delivererId) continue; // el where ya lo garantiza, esto es solo para TS
@@ -30,8 +29,8 @@ export async function checkPendingOrderReminders(now: Date = new Date()): Promis
     if (pendingSince > initialDelayCutoff) continue;
 
     const message = order.acceptedAt
-      ? `Tienes el pedido #${order.orderNumber} por confirmar.`
-      : `Tienes el pedido #${order.orderNumber} por aceptar.`;
+      ? `Tienes el pedido #${order.orderNumber} (${order.customerName}) por confirmar.`
+      : `Tienes el pedido #${order.orderNumber} (${order.customerName}) por aceptar.`;
 
     await notifyDeliverer(order.delivererId, 'Pedido pendiente', message, {
       orderId: order.id,

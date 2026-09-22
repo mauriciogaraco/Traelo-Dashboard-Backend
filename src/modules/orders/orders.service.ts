@@ -874,7 +874,9 @@ async function dispatchToQueue(orderId: string, excludeDelivererId?: string): Pr
     if (!nextInQueue) {
       return null;
     }
-    const dto = await assignOrder(orderId, { delivererId: nextInQueue.id });
+    // autoAccept: false — este es el despacho automático por cola (app móvil), NO una asignación
+    // de staff: el mensajero todavía tiene que aceptar o declinar (ver accept/declineOrder).
+    const dto = await assignOrder(orderId, { delivererId: nextInQueue.id }, { autoAccept: false });
     await deliverersRepository.bumpQueue(nextInQueue.id);
     return dto;
   } catch (error) {
@@ -886,7 +888,20 @@ async function dispatchToQueue(orderId: string, excludeDelivererId?: string): Pr
   }
 }
 
-export async function assignOrder(id: string, input: AssignOrderInput): Promise<OrderDTO> {
+export interface AssignOrderOptions {
+  // true (default): lo asignó el staff desde el dashboard — el pedido queda aceptado de una
+  // (acceptedAt = ahora), el mensajero YA NO puede declinarlo (ver declineOrder: exige
+  // !acceptedAt) y solo le llega un aviso informativo. false: despacho automático por cola
+  // (dispatchToQueue) — ahí sí hace falta accept/decline explícito del mensajero.
+  autoAccept?: boolean;
+}
+
+export async function assignOrder(
+  id: string,
+  input: AssignOrderInput,
+  options: AssignOrderOptions = {},
+): Promise<OrderDTO> {
+  const autoAccept = options.autoAccept ?? true;
   const existing = await ordersRepository.findById(id);
   if (!existing) {
     throw new NotFoundError('Pedido no encontrado');
@@ -903,6 +918,13 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
     throw new BadRequestError('El mensajero no está activo');
   }
 
+  // Reasignación real: ya tenía OTRO mensajero (no el mismo que se le está poniendo de nuevo).
+  // Distinto de la primera asignación (previousDelivererId null) — ahí no hay a quién avisarle
+  // que se lo "retiraron".
+  const previousDelivererId = existing.delivererId;
+  const isNewDeliverer = previousDelivererId !== input.delivererId;
+  const isReassignment = previousDelivererId !== null && isNewDeliverer;
+
   const effectivePercentage = await resolveEffectivePercentage(deliverer);
   const { delivererShare, traeloDeliveryShare } = calc.computeDeliverySplit(
     new Prisma.Decimal(existing.deliveryFee),
@@ -913,8 +935,8 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
     deliverer: { connect: { id: input.delivererId } },
     status: 'ASSIGNED',
     assignedAt: existing.assignedAt ?? new Date(),
-    ...(existing.delivererId !== input.delivererId
-      ? { pickingUpAt: null, onTheWayAt: null, acceptedAt: null }
+    ...(isNewDeliverer
+      ? { pickingUpAt: null, onTheWayAt: null, acceptedAt: autoAccept ? new Date() : null }
       : {}),
     traeloEarning: new Prisma.Decimal(existing.platformFee).plus(traeloDeliveryShare),
     traeloDeliveryShare,
@@ -923,12 +945,20 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
 
   const dto = toDTO(order);
 
-  // Avisa al mensajero por push (app móvil) que se le asignó este pedido. No bloquea la
+  // Avisa por push (app móvil) — con # de pedido y nombre del cliente siempre. No bloquea la
   // respuesta si no tiene token o el envío falla (notifyDeliverer nunca lanza).
+  if (isReassignment && previousDelivererId) {
+    await notifyDeliverer(
+      previousDelivererId,
+      'Pedido reasignado',
+      `La administración decidió retirarte el pedido #${dto.orderNumber} (${dto.customerName}) para mejor gestión.`,
+      { orderId: dto.id, type: 'ORDER_REASSIGNED_AWAY' },
+    );
+  }
   await notifyDeliverer(
     input.delivererId,
     'Nuevo pedido asignado',
-    `Vale #${dto.orderNumber} — ${dto.customerAddress}`,
+    `Has recibido el pedido #${dto.orderNumber} (${dto.customerName}).`,
     { orderId: dto.id, type: 'ORDER_ASSIGNED' },
   );
 

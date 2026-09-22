@@ -72,18 +72,18 @@ export function countClosedSettlementLines(orderId: string) {
   });
 }
 
-// Recordatorios push de "tenés un pedido por aceptar/confirmar" (src/jobs/pending-order-
-// reminders.ts): candidatos crudos — ASSIGNED con mensajero asignado (cubre los dos casos, "sin
-// aceptar" y "aceptado sin confirmar", distinguidos por acceptedAt) a los que no se les mandó un
-// recordatorio dentro del margen prudente. El otro filtro (cuánto hace que el pedido entró en
-// este estado) se aplica en el job, en memoria — mismo criterio que `findMany`, el volumen de
-// pedidos activos es chico, no vale la pena un where con coalesce(acceptedAt, assignedAt) en SQL.
-export function findPendingReminderCandidates(reminderCutoff: Date) {
+// Recordatorio push de "tenés un pedido por aceptar/confirmar" (src/jobs/pending-order-
+// reminders.ts), UNA SOLA VEZ por pedido (lastReminderPushAt null = todavía no se le mandó
+// ninguno) — cubre los dos casos, "sin aceptar" y "aceptado sin confirmar", distinguidos por
+// acceptedAt. El otro filtro (cuánto hace que el pedido entró en este estado) se aplica en el
+// job, en memoria — mismo criterio que `findMany`, el volumen de pedidos activos es chico, no
+// vale la pena un where con coalesce(acceptedAt, assignedAt) en SQL.
+export function findPendingReminderCandidates() {
   return prisma.order.findMany({
     where: {
       status: 'ASSIGNED',
       delivererId: { not: null },
-      OR: [{ lastReminderPushAt: null }, { lastReminderPushAt: { lte: reminderCutoff } }],
+      lastReminderPushAt: null,
     },
     include: orderInclude,
   });

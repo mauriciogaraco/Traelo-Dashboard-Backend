@@ -619,7 +619,11 @@ model Order {
   // Aceptar y confirmar son dos decisiones separadas del mensajero (app móvil): aceptar ("me lo
   // asigno a mí mismo") NO mueve `status` (sigue ASSIGNED), solo marca este campo; confirmar
   // (status: CONFIRMED) es un paso posterior y aparte, y el backend exige que acceptedAt ya esté
-  // seteado para permitirlo (ver ordersService.acceptOrder / updateOrderStatus).
+  // seteado para permitirlo (ver ordersService.acceptOrder / updateOrderStatus). Cuando el
+  // ASIGNA es el staff (dashboard), acceptedAt se marca de una — ese pedido ya está aceptado, el
+  // mensajero no puede declinarlo, solo le llega un aviso informativo (ver ordersService.assignOrder,
+  // AssignOrderOptions.autoAccept). El accept/decline explícito solo aplica al despacho automático
+  // por cola (dispatchToQueue), donde el mensajero sí decide.
   acceptedAt       DateTime?
   // Etapas del reparto mientras el pedido está ASSIGNED (el estado no cambia): el mensajero va por el
   // pedido (pickingUpAt) y ya lo lleva al cliente (onTheWayAt). null = todavía no. El cliente ve el
@@ -684,11 +688,10 @@ model Order {
   pointsTransactions PointsTransaction[]
   redemption         RewardRedemption?
 
-  // Recordatorios push de "tenés un pedido por aceptar/confirmar" (app móvil): última vez que
-  // se le mandó uno al mensajero por este pedido puntual. null = todavía no se le recordó
-  // ninguna. El job periódico (src/jobs/pending-order-reminders.ts) solo manda uno nuevo si ya
-  // pasó el margen prudente (PENDING_ORDER_REMINDER_INTERVAL_MS) desde este valor — evita
-  // acosar al mensajero con un aviso por cada corrida del job mientras el pedido sigue pendiente.
+  // Recordatorio push de "tenés un pedido por aceptar/confirmar" (app móvil): cuándo se le
+  // mandó al mensajero por este pedido puntual. null = todavía no se le mandó. El job periódico
+  // (src/jobs/pending-order-reminders.ts) manda UN SOLO recordatorio por pedido en toda su vida
+  // — nunca se repite, y nunca le quita el pedido a nadie (ver ordersService.assignOrder).
   lastReminderPushAt DateTime?
 
   createdAt DateTime @default(now())
