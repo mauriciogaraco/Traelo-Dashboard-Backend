@@ -9,6 +9,10 @@ const orderItemInputSchema = z
     productName: z.string().min(1).max(150).optional(),
     quantity: z.coerce.number().int().positive().default(1),
     unitPrice: z.coerce.number().min(0),
+    // Empaque ya resuelto (nombre + costo total de la línea) por quien arma este input — ver
+    // customer-orders.service.ts (resolveItemForCart). El flujo manual del dashboard no los usa.
+    packagingName: z.string().min(1).max(60).optional(),
+    packagingFee: z.coerce.number().min(0).optional(),
   })
   .refine((item) => item.productId !== undefined || item.productName !== undefined, {
     message: 'Debe indicar productId o productName',

@@ -883,6 +883,12 @@ model OrderItem {
   // unitPrice conserva el precio original; el precio efectivo es subtotal - pointsDiscount.
   pointsRedeemed   Int           @default(0)
   pointsDiscount   Decimal       @default(0) @db.Decimal(10, 2)
+  // Empaque elegido (snapshot: nombre y costo tal como estaban en Product.packaging al
+  // comprar — si luego cambia el catálogo, este pedido no se altera). null = sin empaque.
+  // packagingFee es 100% del negocio (como subtotal): NUNCA entra en la base de la comisión
+  // de Tráelo (ver prepareBusinessGroups en orders.service.ts).
+  packagingName    String?
+  packagingFee     Decimal       @default(0) @db.Decimal(10, 2)
 
   @@index([productId])
   @@map("order_items")

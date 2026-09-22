@@ -42,6 +42,9 @@ export interface OrderItemDTO {
   unitPrice: number;
   subtotal: number;
   commissionAmount: number;
+  /** Empaque elegido (null = sin empaque) y su costo — ya sumado en `subtotal` del negocio, no acá. */
+  packagingName: string | null;
+  packagingFee: number;
   /** Canje: puntos usados y valor en CUP cubierto por una unidad de esta línea (0 = sin canje). */
   pointsRedeemed: number;
   pointsDiscount: number;
@@ -93,6 +96,7 @@ export interface OrderDTO {
   source: OrderSource;
   raffleNumber: number | null;
   productsTotal: number; // subtotal de productos — 100% del negocio
+  packagingTotal: number; // cuánto de productsTotal es empaque (ya sumado adentro; informativo)
   platformFee: number; // "Servicio Tráelo": cargo visible, redondeado, ganancia de Tráelo
   total: number; // productsTotal - pointsDiscount + deliveryFee + platformFee (lo que paga el cliente)
   pointsDiscount: number; // valor en CUP cubierto con puntos (0 sin canje); no reduce productsTotal
@@ -131,6 +135,10 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     source: order.source,
     raffleNumber: order.raffleNumber,
     productsTotal: decimalToNumber(order.productsTotal),
+    packagingTotal: order.businesses.reduce(
+      (sum, ob) => sum + ob.items.reduce((s, item) => s + decimalToNumber(item.packagingFee), 0),
+      0,
+    ),
     platformFee: decimalToNumber(order.platformFee),
     total: decimalToNumber(order.total),
     pointsDiscount: decimalToNumber(order.pointsDiscount),
@@ -164,6 +172,8 @@ function toDTO(order: OrderWithRelations): OrderDTO {
         unitPrice: decimalToNumber(item.unitPrice),
         subtotal: decimalToNumber(item.subtotal),
         commissionAmount: decimalToNumber(item.commissionAmount),
+        packagingName: item.packagingName,
+        packagingFee: decimalToNumber(item.packagingFee),
         pointsRedeemed: item.pointsRedeemed,
         pointsDiscount: decimalToNumber(item.pointsDiscount),
       })),
@@ -238,6 +248,8 @@ interface PreparedGroup {
   businessId: string;
   businessNameSnapshot: string;
   subtotal: Prisma.Decimal;
+  // Cuánto de `subtotal` es empaque (informativo — ya está sumado adentro de subtotal).
+  packagingTotal: Prisma.Decimal;
   commissionEarned: Prisma.Decimal;
   commissionTypeSnapshot: CommissionType;
   commissionRateSnapshot: Prisma.Decimal | null;
@@ -287,17 +299,21 @@ async function prepareBusinessGroups(
       items.push({ ...priced, commissionAmount });
     }
 
-    const subtotal = items.reduce((acc, item) => acc.plus(item.subtotal), new Prisma.Decimal(0));
+    // Base de la comisión: SOLO producto. El empaque (packagingFee) es un costo de material
+    // 100% del negocio, nunca ganancia de Tráelo — por eso se suma después, no acá.
+    const productSubtotal = items.reduce((acc, item) => acc.plus(item.subtotal), new Prisma.Decimal(0));
     const groupCommission = commissionCalculator.computeGroupCommission(
       business,
-      subtotal,
+      productSubtotal,
       items.map((item) => item.commissionAmount),
     );
+    const packagingSubtotal = items.reduce((acc, item) => acc.plus(item.packagingFee), new Prisma.Decimal(0));
 
     preparedGroups.push({
       businessId: group.businessId,
       businessNameSnapshot: business.name,
-      subtotal,
+      subtotal: productSubtotal.plus(packagingSubtotal),
+      packagingTotal: packagingSubtotal,
       commissionEarned: groupCommission.commissionEarned,
       commissionTypeSnapshot: groupCommission.commissionTypeSnapshot,
       commissionRateSnapshot: groupCommission.commissionRateSnapshot,
@@ -324,6 +340,8 @@ function toBusinessesCreateInput(preparedGroups: PreparedGroup[]) {
         unitPrice: item.unitPrice,
         subtotal: item.subtotal,
         commissionAmount: item.commissionAmount,
+        packagingName: item.packagingName,
+        packagingFee: item.packagingFee,
         ...(item.pointsRedeemed
           ? { pointsRedeemed: item.pointsRedeemed, pointsDiscount: item.pointsDiscount }
           : {}),
@@ -366,6 +384,8 @@ function toCartLines(groups: PreparedGroup[]) {
 
 export interface OrderQuoteDTO {
   productsTotal: number;
+  /** Cuánto de productsTotal es empaque (ya sumado adentro, esto es solo para mostrarlo aparte). */
+  packagingTotal: number;
   pointsDiscount: number;
   /** Productos que paga el cliente en dinero: productsTotal - pointsDiscount. */
   productsToPay: number;
@@ -408,6 +428,7 @@ export async function quoteOrder(
 
   return {
     productsTotal: decimalToNumber(totals.productsTotal),
+    packagingTotal: decimalToNumber(totals.packagingTotal),
     pointsDiscount: decimalToNumber(pointsDiscount),
     productsToPay: decimalToNumber(totals.productsTotal.minus(pointsDiscount)),
     deliveryFee: decimalToNumber(deliveryFee),
@@ -432,7 +453,10 @@ function summarizeGroups(groups: PreparedGroup[], deliveryFee: Prisma.Decimal) {
     (acc, group) => acc.plus(group.commissionEarned),
     new Prisma.Decimal(0),
   );
-  return calc.computeOrderTotals({ subtotal, rawCommissionSum, deliveryFee });
+  // Informativo (ya está sumado adentro de productsTotal): cuánto de eso es empaque, para que
+  // la app pueda mostrar una línea aparte en vez de esconderlo dentro de "Productos".
+  const packagingTotal = groups.reduce((acc, group) => acc.plus(group.packagingTotal), new Prisma.Decimal(0));
+  return { ...calc.computeOrderTotals({ subtotal, rawCommissionSum, deliveryFee }), packagingTotal };
 }
 
 export async function createOrder(
