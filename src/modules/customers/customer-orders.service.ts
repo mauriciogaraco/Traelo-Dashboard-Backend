@@ -4,6 +4,7 @@ import {
   CartChangedError,
   ConflictError,
 } from '../../shared/errors';
+import { Prisma } from '../../generated/prisma/client';
 import { decimalToNumber } from '../../shared/prisma';
 import type { PaginationMeta } from '../../shared/http';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -219,7 +220,19 @@ async function resolveCart(
     throw new CartChangedError(changes);
   }
 
-  const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now));
+  // Subtotal de productos (CUP, sin delivery ni servicio) — el recargo por volumen de
+  // computeAppDeliveryFee lo necesita para saber si el pedido es "grande".
+  const productsSubtotal = businesses.reduce(
+    (sum, group) =>
+      sum.plus(
+        group.items.reduce(
+          (groupSum, item) => groupSum.plus(new Prisma.Decimal(item.unitPrice).times(item.quantity)),
+          new Prisma.Decimal(0),
+        ),
+      ),
+    new Prisma.Decimal(0),
+  );
+  const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now, productsSubtotal));
 
   return { businesses, deliveryFee };
 }
