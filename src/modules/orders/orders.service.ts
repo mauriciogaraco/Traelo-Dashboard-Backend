@@ -2,6 +2,9 @@ import { NotFoundError, BadRequestError, ConflictError, ForbiddenError } from '.
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
 import { resolveDateRange } from '../../shared/date-range';
+import { notifyDeliverer } from '../../shared/push';
+import { sendTelegramMessage } from '../../shared/telegram';
+import { logger } from '../../shared/logger';
 import { Prisma } from '../../generated/prisma/client';
 import type { CommissionType, OrderSource, OrderStatus } from '../../generated/prisma/enums';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -26,6 +29,7 @@ import type {
   CreateOrderInput,
   ListOrdersQuery,
   UpdateOrderInput,
+  UpdateOrderItemsInput,
   UpdateOrderStageInput,
   UpdateOrderStatusInput,
 } from './orders.dto';
@@ -47,6 +51,7 @@ export interface OrderBusinessDTO {
   id: string;
   businessId: string;
   businessName: string;
+  businessAddress: string;
   subtotal: number;
   commissionEarned: number;
   commissionTypeSnapshot: CommissionType | null;
@@ -73,6 +78,7 @@ export interface OrderDTO {
   status: OrderStatus;
   orderDate: Date;
   assignedAt: Date | null;
+  acceptedAt: Date | null;
   pickingUpAt: Date | null;
   onTheWayAt: Date | null;
   completedAt: Date | null;
@@ -111,6 +117,7 @@ function toDTO(order: OrderWithRelations): OrderDTO {
     status: order.status,
     orderDate: order.orderDate,
     assignedAt: order.assignedAt,
+    acceptedAt: order.acceptedAt,
     pickingUpAt: order.pickingUpAt,
     onTheWayAt: order.onTheWayAt,
     completedAt: order.completedAt,
@@ -144,6 +151,7 @@ function toDTO(order: OrderWithRelations): OrderDTO {
       businessId: ob.businessId,
       // Pedidos anteriores a este cambio no tienen snapshot: se cae al nombre actual del negocio.
       businessName: ob.businessNameSnapshot ?? ob.business.name,
+      businessAddress: ob.business.address,
       subtotal: decimalToNumber(ob.subtotal),
       commissionEarned: decimalToNumber(ob.commissionEarned),
       commissionTypeSnapshot: ob.commissionTypeSnapshot,
@@ -544,7 +552,18 @@ export async function createOrder(
     await customersRepository.touchLastOrderAt(input.customerId, order.orderDate);
   }
 
-  const dto = toDTO(order);
+  let dto = toDTO(order);
+
+  // Despacho automático por cola de mensajeros en línea (app móvil, ver Deliverer.queuedAt): si
+  // hay alguien activo, se le asigna este pedido recién creado sin esperar a que el staff lo
+  // asigne a mano — y ese mensajero pasa al final de la cola. El staff conserva control total:
+  // PATCH /orders/:id/assign sigue funcionando igual para reasignar en cualquier momento. Si la
+  // cola está vacía (nadie en línea) o esto falla por lo que sea, el pedido simplemente se
+  // queda PENDING para asignación manual — nunca se pierde la creación del pedido por esto.
+  const dispatched = await dispatchToQueue(order.id);
+  if (dispatched) {
+    dto = dispatched;
+  }
 
   // Los pedidos de la app ya NO se envían a Telegram: la base de datos es la fuente de verdad y el
   // dashboard los muestra. (Antes se avisaba al grupo de Telegram por cada pedido que no era manual.)
@@ -565,6 +584,19 @@ export async function listOrders(
       ? { from: query.from ?? new Date(0), to: query.to ?? new Date() }
       : null;
 
+  // "Reiniciar historial" (app móvil): solo aplica cuando el propio DELIVERER pregunta por su
+  // Historial (COMPLETED/CANCELLED) — nunca al staff/dashboard/cuadres, que siguen viendo el
+  // historial completo sin importar qué haya reiniciado cualquier mensajero. Es un filtro de
+  // visualización, no borra ni oculta el pedido para nadie más.
+  let historyResetWhere: Prisma.OrderWhereInput = {};
+  if (scopeDelivererId && (query.status === 'COMPLETED' || query.status === 'CANCELLED')) {
+    const deliverer = await deliverersRepository.findById(scopeDelivererId);
+    if (deliverer?.historyResetAt) {
+      const dateField = query.status === 'COMPLETED' ? 'completedAt' : 'cancelledAt';
+      historyResetWhere = { [dateField]: { gte: deliverer.historyResetAt } };
+    }
+  }
+
   const where: Prisma.OrderWhereInput = {
     ...(query.status ? { status: query.status } : {}),
     ...(query.delivererId ? { delivererId: query.delivererId } : {}),
@@ -573,6 +605,7 @@ export async function listOrders(
     ...(dateRange ? { orderDate: { gte: dateRange.from, lte: dateRange.to } } : {}),
     ...(scopeDelivererId ? { delivererId: scopeDelivererId } : {}),
     ...(scopeCustomerId ? { customerId: scopeCustomerId } : {}),
+    ...historyResetWhere,
   };
 
   const { skip, take } = toSkipTake(query);
@@ -603,10 +636,37 @@ export async function getOrderById(
   return toDTO(order);
 }
 
-export async function updateOrder(id: string, input: UpdateOrderInput): Promise<OrderDTO> {
+// El mensajero editó los productos de su propio vale desde la app (PATCH /:id/items) — el
+// dashboard lee el mismo pedido de Postgres, así que ya "ve" el cambio en su próximo refresh;
+// esto es solo para que el staff se entere sin tener que estar refrescando la pantalla. Mismo
+// canal operacional que el resto de los avisos internos, nunca la fuente de verdad del pedido.
+function formatOrderEditedNotification(order: OrderDTO, previousTotal: number): string {
+  const businessNames = order.businesses.map((b) => b.businessName).join(', ') || '—';
+  const lines = [
+    `✏️ <b>Pedido #${order.orderNumber}</b> editado por el mensajero`,
+    `Mensajero: ${order.delivererName ?? '—'}`,
+    `Cliente: ${order.customerName} — ${order.customerPhone}`,
+    `Negocio(s): ${businessNames}`,
+    `Total: $${previousTotal.toFixed(2)} CUP → $${order.total.toFixed(2)} CUP`,
+  ];
+  return lines.join('\n');
+}
+
+export async function updateOrder(
+  id: string,
+  input: UpdateOrderInput,
+  // Un DELIVERER autenticado (PATCH /:id/items, app móvil) solo puede editar sus propios
+  // pedidos — el DTO de esa ruta (updateOrderItemsSchema) ya restringe qué campos puede mandar
+  // (solo `businesses`), esto es la restricción de ownership que le falta. undefined para
+  // staff, sin esta restricción — ver ordersController.resolveDelivererScope.
+  scopeDelivererId?: string,
+): Promise<OrderDTO> {
   const existing = await ordersRepository.findById(id);
   if (!existing) {
     throw new NotFoundError('Pedido no encontrado');
+  }
+  if (scopeDelivererId && existing.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
   }
   // Un pedido CANCELLED también se puede editar (corregir datos del cliente, productos o montos):
   // sigue CANCELLED, no genera puntos ni entra a cuadres (solo los COMPLETED lo hacen) y el canje
@@ -721,6 +781,7 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
     }
   }
 
+  const previousTotal = decimalToNumber(existing.total);
   const order = await ordersRepository.update(id, data);
 
   // Un pedido COMPLETED corregido en montos puede cambiar sus puntos: se suman o se retiran
@@ -728,7 +789,26 @@ export async function updateOrder(id: string, input: UpdateOrderInput): Promise<
   if (existing.status === 'COMPLETED' && financialFieldsChanged) {
     await pointsService.syncOrderPointsSafely(id);
   }
-  return toDTO(order);
+  const dto = toDTO(order);
+
+  // Solo cuando fue el mensajero quien editó (nunca para las propias ediciones del staff desde
+  // el dashboard — ya saben lo que cambiaron) y solo si de verdad tocó los productos.
+  if (scopeDelivererId && itemsChanged) {
+    await sendTelegramMessage(formatOrderEditedNotification(dto, previousTotal));
+  }
+
+  // El staff editó el vale de un pedido que ya tiene mensajero — avisarle a él por push (app
+  // móvil), nunca cuando fue el propio mensajero quien lo editó (ya lo sabe).
+  if (!scopeDelivererId && existing.delivererId) {
+    await notifyDeliverer(
+      existing.delivererId,
+      'Tu vale fue actualizado',
+      `El pedido #${dto.orderNumber} tiene cambios — revísalo en la app.`,
+      { orderId: dto.id, type: 'ORDER_EDITED' },
+    );
+  }
+
+  return dto;
 }
 
 export async function deleteOrder(id: string): Promise<void> {
@@ -755,6 +835,31 @@ export async function deleteOrder(id: string): Promise<void> {
     return;
   }
   await ordersRepository.remove(id);
+}
+
+// Compartido por createOrder (pedido recién creado) y declineOrder (reparto en cascada: ver
+// comentario ahí) — intenta asignar `orderId` (debe estar PENDING) al siguiente en la cola de
+// despacho automático y lo manda al final de la cola. `excludeDelivererId` sirve para que, al
+// re-despachar tras un decline, nunca se le vuelva a ofrecer el mismo pedido a quien recién lo
+// rechazó (ver el comentario en deliverersRepository.findNextInQueue). Si no hay nadie en línea,
+// o el despacho falla por lo que sea, devuelve null y el pedido se queda como estaba —
+// PENDING, para asignación manual — nunca revienta el flujo que lo llama.
+async function dispatchToQueue(orderId: string, excludeDelivererId?: string): Promise<OrderDTO | null> {
+  try {
+    const nextInQueue = await deliverersRepository.findNextInQueue(excludeDelivererId);
+    if (!nextInQueue) {
+      return null;
+    }
+    const dto = await assignOrder(orderId, { delivererId: nextInQueue.id });
+    await deliverersRepository.bumpQueue(nextInQueue.id);
+    return dto;
+  } catch (error) {
+    logger.warn(
+      { err: error, orderId },
+      'Despacho automático por cola falló — el pedido queda PENDING para asignar a mano',
+    );
+    return null;
+  }
 }
 
 export async function assignOrder(id: string, input: AssignOrderInput): Promise<OrderDTO> {
@@ -784,13 +889,26 @@ export async function assignOrder(id: string, input: AssignOrderInput): Promise<
     deliverer: { connect: { id: input.delivererId } },
     status: 'ASSIGNED',
     assignedAt: existing.assignedAt ?? new Date(),
-    ...(existing.delivererId !== input.delivererId ? { pickingUpAt: null, onTheWayAt: null } : {}),
+    ...(existing.delivererId !== input.delivererId
+      ? { pickingUpAt: null, onTheWayAt: null, acceptedAt: null }
+      : {}),
     traeloEarning: new Prisma.Decimal(existing.platformFee).plus(traeloDeliveryShare),
     traeloDeliveryShare,
     delivererEarning: delivererShare,
   });
 
-  return toDTO(order);
+  const dto = toDTO(order);
+
+  // Avisa al mensajero por push (app móvil) que se le asignó este pedido. No bloquea la
+  // respuesta si no tiene token o el envío falla (notifyDeliverer nunca lanza).
+  await notifyDeliverer(
+    input.delivererId,
+    'Nuevo pedido asignado',
+    `Vale #${dto.orderNumber} — ${dto.customerAddress}`,
+    { orderId: dto.id, type: 'ORDER_ASSIGNED' },
+  );
+
+  return dto;
 }
 
 /**
@@ -849,19 +967,64 @@ function notifyStageSafely(
   void sendPushToCustomer(order.customerId, buildStageNotification(stage, order));
 }
 
+// Staff conserva la posibilidad de completar (o saltar a cualquier sub-fase) directo desde
+// cualquier estado activo (comportamiento previo del dashboard, no depende de que el mensajero
+// vaya avanzando el viaje desde la app). El mensajero, en cambio, tiene que recorrer la
+// secuencia completa paso a paso, sin saltos: CONFIRMED -> HEADING_OUT -> PICKING_UP ->
+// ON_THE_WAY -> COMPLETED — es la app móvil la que exige aceptar antes de confirmar y avanzar
+// en orden antes de completar.
+const STAFF_STATUS_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
+  PENDING: ['CANCELLED'],
+  ASSIGNED: ['CONFIRMED', 'HEADING_OUT', 'PICKING_UP', 'ON_THE_WAY', 'COMPLETED', 'CANCELLED'],
+  CONFIRMED: ['HEADING_OUT', 'PICKING_UP', 'ON_THE_WAY', 'COMPLETED', 'CANCELLED'],
+  HEADING_OUT: ['PICKING_UP', 'ON_THE_WAY', 'COMPLETED', 'CANCELLED'],
+  PICKING_UP: ['ON_THE_WAY', 'COMPLETED', 'CANCELLED'],
+  ON_THE_WAY: ['COMPLETED', 'CANCELLED'],
+};
+
+const DELIVERER_STATUS_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
+  ASSIGNED: ['CONFIRMED', 'CANCELLED'],
+  CONFIRMED: ['HEADING_OUT', 'CANCELLED'],
+  HEADING_OUT: ['PICKING_UP', 'CANCELLED'],
+  PICKING_UP: ['ON_THE_WAY', 'CANCELLED'],
+  ON_THE_WAY: ['COMPLETED', 'CANCELLED'],
+};
+
 export async function updateOrderStatus(
   id: string,
   input: UpdateOrderStatusInput,
+  // Un DELIVERER autenticado solo puede cambiar el estado de sus propios pedidos
+  // asignados (app móvil — ver ordersController.resolveDelivererScope). undefined para staff
+  // (OWNER/ADMIN/EMPLOYEE), que no tiene esta restricción.
+  scopeDelivererId?: string,
 ): Promise<OrderDTO> {
   const existing = await ordersRepository.findById(id);
   if (!existing) {
     throw new NotFoundError('Pedido no encontrado');
   }
+  if (scopeDelivererId && existing.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
+  }
+
+  const transitions = scopeDelivererId ? DELIVERER_STATUS_TRANSITIONS : STAFF_STATUS_TRANSITIONS;
+  const allowed = transitions[existing.status] ?? [];
+  if (!allowed.includes(input.status)) {
+    throw new ConflictError(`No se puede pasar de ${existing.status} a ${input.status}`);
+  }
+
+  // El mensajero tiene que aceptar explícitamente (PATCH /:id/accept) antes de poder confirmar
+  // — "aceptar" y "confirmar" son dos decisiones separadas suyas, no una sola. Staff se salta
+  // esto (no pasa por la app, no hay "aceptar" en el dashboard).
+  if (
+    scopeDelivererId &&
+    existing.status === 'ASSIGNED' &&
+    input.status === 'CONFIRMED' &&
+    !existing.acceptedAt
+  ) {
+    throw new ConflictError('Debes aceptar el pedido antes de confirmarlo');
+  }
 
   if (input.status === 'COMPLETED') {
-    if (existing.status !== 'ASSIGNED') {
-      throw new ConflictError('Solo se puede completar un pedido en estado ASSIGNED');
-    }
     const order = await ordersRepository.update(id, {
       status: 'COMPLETED',
       completedAt: new Date(),
@@ -873,17 +1036,87 @@ export async function updateOrderStatus(
     return toDTO(order);
   }
 
-  if (existing.status !== 'PENDING' && existing.status !== 'ASSIGNED') {
-    throw new ConflictError('Solo se puede cancelar un pedido PENDING o ASSIGNED');
+  if (input.status === 'CANCELLED') {
+    const cancelData = { status: 'CANCELLED' as const, cancelledAt: new Date() };
+    // Con canje aplicado, los puntos vuelven al cliente en la misma transacción que la cancelación.
+    const order =
+      existing.redemption?.status === 'APPLIED'
+        ? await rewardsRepository.cancelOrderWithRefund(id, cancelData)
+        : await ordersRepository.update(id, cancelData);
+    await releaseLocationIfIdleSafely(order.delivererId);
+    return toDTO(order);
   }
-  const cancelData = { status: 'CANCELLED' as const, cancelledAt: new Date() };
-  // Con canje aplicado, los puntos vuelven al cliente en la misma transacción que la cancelación.
-  const order =
-    existing.redemption?.status === 'APPLIED'
-      ? await rewardsRepository.cancelOrderWithRefund(id, cancelData)
-      : await ordersRepository.update(id, cancelData);
-  await releaseLocationIfIdleSafely(order.delivererId);
+
+  // CONFIRMED/HEADING_OUT/PICKING_UP/ON_THE_WAY: solo cambia el status — salvo PICKING_UP/
+  // ON_THE_WAY, que además marcan pickingUpAt/onTheWayAt (el seguimiento en vivo del cliente
+  // sigue disparándose de esos timestamps, no del status en sí — ver Order.pickingUpAt).
+  const data: Prisma.OrderUpdateInput = { status: input.status };
+  if (input.status === 'PICKING_UP' && !existing.pickingUpAt) data.pickingUpAt = new Date();
+  if (input.status === 'ON_THE_WAY' && !existing.onTheWayAt) data.onTheWayAt = new Date();
+
+  const order = await ordersRepository.update(id, data);
+  if (input.status === 'PICKING_UP' || input.status === 'ON_THE_WAY') {
+    notifyStageSafely(input.status, order);
+  }
   return toDTO(order);
+}
+
+// El mensajero acepta ("se autoasigna") un pedido recién llegado — todavía ASSIGNED, el
+// staff ya lo asignó desde el dashboard, delivererId ya es el suyo. Esto NO cambia `status`
+// (sigue en ASSIGNED = "Por confirmar"): solo marca `acceptedAt`, que habilita el siguiente
+// paso, distinto y posterior, de confirmar (updateOrderStatus, ASSIGNED -> CONFIRMED).
+export async function acceptOrder(id: string, scopeDelivererId: string): Promise<OrderDTO> {
+  const existing = await ordersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Pedido no encontrado');
+  }
+  if (existing.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
+  }
+  if (existing.status !== 'ASSIGNED') {
+    throw new ConflictError('Solo se puede aceptar un pedido recién asignado (ASSIGNED)');
+  }
+
+  const order = await ordersRepository.update(id, { acceptedAt: existing.acceptedAt ?? new Date() });
+  return toDTO(order);
+}
+
+// Simétrico a assignOrder: el mensajero rechaza un pedido recién asignado. Solo antes de
+// aceptar (acceptedAt null) — una vez que aceptó, ya no puede "declinar" (eso sería
+// contradictorio con haberlo aceptado), su única salida es cancelar. Vuelve a PENDING sin
+// mensajero, y revierte los montos de mensajería que assignOrder había calculado (nadie se
+// quedó con esa entrega todavía) — y de ahí, reparto en cascada por la cola de despacho
+// automático (brief: "si declina, se le pasa al siguiente en la cola, hasta que alguno lo
+// acepte, y si le da la vuelta completa vuelve al primero"): se intenta re-despachar al
+// siguiente en línea, excluyendo a quien acaba de declinar (ver dispatchToQueue/
+// findNextInQueue). Si nadie más está en línea, o el re-despacho falla, el pedido se queda
+// PENDING — listo para que el staff lo reasigne a mano, igual que si nunca hubiera habido cola.
+export async function declineOrder(id: string, scopeDelivererId: string): Promise<OrderDTO> {
+  const existing = await ordersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Pedido no encontrado');
+  }
+  if (existing.delivererId !== scopeDelivererId) {
+    throw new ForbiddenError();
+  }
+  if (existing.status !== 'ASSIGNED') {
+    throw new ConflictError('Solo se puede declinar un pedido recién asignado (ASSIGNED)');
+  }
+  if (existing.acceptedAt) {
+    throw new ConflictError('Ya aceptaste este pedido — para no continuar, cancélalo en vez de declinarlo');
+  }
+
+  const order = await ordersRepository.update(id, {
+    deliverer: { disconnect: true },
+    status: 'PENDING',
+    assignedAt: null,
+    delivererEarning: new Prisma.Decimal(0),
+    traeloDeliveryShare: new Prisma.Decimal(0),
+    traeloEarning: new Prisma.Decimal(existing.platformFee),
+  });
+
+  const redispatched = await dispatchToQueue(id, scopeDelivererId);
+  return redispatched ?? toDTO(order);
 }
 
 export interface BulkCompleteOrdersDTO {
@@ -905,8 +1138,21 @@ export async function bulkCompleteOrders(ids: string[]): Promise<BulkCompleteOrd
       skipped.push({ id, reason: 'Pedido no encontrado' });
       continue;
     }
-    if (existing.status !== 'ASSIGNED') {
-      skipped.push({ id, reason: 'Solo se puede completar un pedido en estado ASSIGNED' });
+    // Cualquier estado activo previo a COMPLETED/CANCELLED es válido acá — el mensajero puede
+    // no haber usado la app en absoluto (se queda en ASSIGNED) o estar en cualquier sub-fase
+    // del trayecto; el staff igual puede completarlo directo desde el dashboard.
+    const completableStatuses: OrderStatus[] = [
+      'ASSIGNED',
+      'CONFIRMED',
+      'HEADING_OUT',
+      'PICKING_UP',
+      'ON_THE_WAY',
+    ];
+    if (!completableStatuses.includes(existing.status)) {
+      skipped.push({
+        id,
+        reason: 'Solo se puede completar un pedido en un estado activo previo a COMPLETED',
+      });
       continue;
     }
     const order = await ordersRepository.update(id, {

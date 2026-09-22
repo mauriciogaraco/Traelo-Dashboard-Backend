@@ -11,8 +11,11 @@ const referenceDateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida, se espera YYYY-MM-DD')
   .transform((value) => new Date(`${value}T12:00:00.000Z`));
 
+// delivererId es opcional en el schema porque un DELIVERER generando su propio cuadre diario
+// (autoservicio) no lo manda — se resuelve server-side desde el JWT (ver settlements.controller
+// resolveDelivererScope). Staff sí debe mandarlo (settlements.service lo exige si no hay scope).
 export const generateSettlementSchema = z.object({
-  delivererId: z.cuid(),
+  delivererId: z.cuid().optional(),
   date: referenceDateSchema.optional(),
 });
 

@@ -41,6 +41,17 @@ enum SubscriptionStatus {
 enum OrderStatus {
   PENDING
   ASSIGNED
+  // Fase app mensajero: el mensajero acepta el pedido asignado ("Por confirmar" -> ASSIGNED)
+  // y lo confirma explícitamente antes de completarlo. Distinto de simplemente estar ASSIGNED:
+  // separa "me lo asignaron" de "ya lo tengo, voy en camino".
+  CONFIRMED
+  // Sub-fases del trayecto, entre confirmar y completar — el mensajero las avanza una por una
+  // desde la app (secuencial, sin saltos): va camino al negocio, está recogiendo el pedido en
+  // el negocio, y ya va con el pedido hacia el cliente. Staff puede saltárselas igual que ya
+  // podía saltarse CONFIRMED (ver ordersService.STAFF_STATUS_TRANSITIONS).
+  HEADING_OUT
+  PICKING_UP
+  ON_THE_WAY
   COMPLETED
   CANCELLED
 }
@@ -167,6 +178,29 @@ model Deliverer {
   photoUrl             String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+
+  // Cola de despacho automático (app móvil): null = no está en línea, no recibe pedidos
+  // nuevos. No-null = en línea, y el valor es la posición de turno — el pedido nuevo se le
+  // ofrece al Deliverer en línea con el queuedAt más antiguo (el que lleva más tiempo
+  // esperando), y al asignarle uno se le vuelve a poner queuedAt = ahora (pasa al final de la
+  // cola). Activarse (null -> ahora) también deja a ese mensajero al final: su timestamp fresco
+  // es, por construcción, posterior al de cualquiera que ya haya recibido un pedido antes.
+  // Distinto de `user.active` (cuenta habilitada/dada de baja por el staff, administrativo).
+  queuedAt DateTime?
+
+  // "Reiniciar historial" (app móvil): fecha desde la que el mensajero quiere ver su propio
+  // historial de entregados/cancelados. Es puramente de visualización — nunca borra ni oculta
+  // pedidos para el staff/dashboard/cuadres, solo filtra la consulta cuando el que pregunta es
+  // el propio DELIVERER (ver ordersService.listOrders, scopeDelivererId). null = sin filtrar,
+  // ve todo su historial completo.
+  historyResetAt DateTime?
+
+  // Notificaciones push (app móvil): token de Expo Push del dispositivo donde el mensajero
+  // tiene sesión iniciada. Un solo token por mensajero (un solo dispositivo activo a la vez,
+  // igual supuesto que el resto de esta app) — se sobrescribe en cada login/registro, nunca se
+  // acumula una lista. null = el mensajero nunca dio permiso de notificaciones, o cerró sesión
+  // (ver AuthStore.logout en la app, que lo limpia). Ver src/shared/push.
+  expoPushToken String?
 
   assignedOrders Order[]      @relation("OrderDeliverer")
   settlements    Settlement[]
@@ -582,9 +616,16 @@ model Order {
   source           OrderSource @default(MANUAL)
   orderDate        DateTime    @default(now())
   assignedAt       DateTime?
+  // Aceptar y confirmar son dos decisiones separadas del mensajero (app móvil): aceptar ("me lo
+  // asigno a mí mismo") NO mueve `status` (sigue ASSIGNED), solo marca este campo; confirmar
+  // (status: CONFIRMED) es un paso posterior y aparte, y el backend exige que acceptedAt ya esté
+  // seteado para permitirlo (ver ordersService.acceptOrder / updateOrderStatus).
+  acceptedAt       DateTime?
   // Etapas del reparto mientras el pedido está ASSIGNED (el estado no cambia): el mensajero va por el
   // pedido (pickingUpAt) y ya lo lleva al cliente (onTheWayAt). null = todavía no. El cliente ve el
-  // seguimiento en vivo a partir de pickingUpAt.
+  // seguimiento en vivo a partir de pickingUpAt. Se siguen llenando (además del status
+  // CONFIRMED/HEADING_OUT/PICKING_UP/ON_THE_WAY de la app móvil) para no romper el seguimiento en
+  // vivo del cliente, que se dispara a partir de estos timestamps — ver ordersService.updateOrderStatus.
   pickingUpAt      DateTime?
   onTheWayAt       DateTime?
   completedAt      DateTime?
@@ -642,6 +683,13 @@ model Order {
 
   pointsTransactions PointsTransaction[]
   redemption         RewardRedemption?
+
+  // Recordatorios push de "tenés un pedido por aceptar/confirmar" (app móvil): última vez que
+  // se le mandó uno al mensajero por este pedido puntual. null = todavía no se le recordó
+  // ninguna. El job periódico (src/jobs/pending-order-reminders.ts) solo manda uno nuevo si ya
+  // pasó el margen prudente (PENDING_ORDER_REMINDER_INTERVAL_MS) desde este valor — evita
+  // acosar al mensajero con un aviso por cada corrida del job mientras el pedido sigue pendiente.
+  lastReminderPushAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

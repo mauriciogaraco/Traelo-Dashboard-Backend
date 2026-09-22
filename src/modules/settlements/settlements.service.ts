@@ -1,4 +1,4 @@
-import { NotFoundError, ConflictError, ForbiddenError } from '../../shared/errors';
+import { NotFoundError, ConflictError, ForbiddenError, BadRequestError } from '../../shared/errors';
 import { buildPaginationMeta, toSkipTake, type PaginationMeta } from '../../shared/http';
 import { decimalToNumber } from '../../shared/prisma';
 import {
@@ -92,12 +92,22 @@ async function generateSettlement(
   return toDTO(settlement);
 }
 
+// scopeDelivererId viene del propio JWT cuando quien pide es un DELIVERER generando su propio
+// cuadre (autoservicio, "al terminar el día") — siempre gana sobre cualquier delivererId que
+// mande el body, igual que el resto de los endpoints scoped de esta app (nunca se confía en lo
+// que manda el cliente para decidir de quién es el cuadre). Staff sigue mandando delivererId en
+// el body, para cualquier mensajero.
 export async function generateDailySettlement(
   input: GenerateSettlementInput,
+  scopeDelivererId?: string,
 ): Promise<SettlementDTO> {
+  const delivererId = scopeDelivererId ?? input.delivererId;
+  if (!delivererId) {
+    throw new BadRequestError('delivererId es requerido');
+  }
   const referenceDate = input.date ?? new Date();
   return generateSettlement(
-    input.delivererId,
+    delivererId,
     'DAILY',
     startOfBusinessDay(referenceDate),
     endOfBusinessDay(referenceDate),
@@ -107,6 +117,11 @@ export async function generateDailySettlement(
 export async function generateWeeklySettlement(
   input: GenerateSettlementInput,
 ): Promise<SettlementDTO> {
+  // Sin autoservicio para el semanal (la ruta sigue siendo staff-only) — delivererId lo sigue
+  // mandando siempre el staff en el body.
+  if (!input.delivererId) {
+    throw new BadRequestError('delivererId es requerido');
+  }
   const referenceDate = input.date ?? new Date();
   return generateSettlement(
     input.delivererId,
