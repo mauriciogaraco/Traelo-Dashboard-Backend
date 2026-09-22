@@ -22,8 +22,10 @@ export async function listSettlements(req: Request, res: Response): Promise<void
 }
 
 export async function generateDailySettlement(req: Request, res: Response): Promise<void> {
+  const scopeDelivererId = await resolveDelivererScope(req);
   const settlement = await settlementsService.generateDailySettlement(
     req.body as GenerateSettlementInput,
+    scopeDelivererId,
   );
   sendCreated(res, settlement);
 }

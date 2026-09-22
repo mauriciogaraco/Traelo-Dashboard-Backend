@@ -10,6 +10,7 @@ import type {
   CreateOrderInput,
   ListOrdersQuery,
   UpdateOrderInput,
+  UpdateOrderItemsInput,
   UpdateOrderStageInput,
   UpdateOrderStatusInput,
 } from './orders.dto';
@@ -64,7 +65,42 @@ export async function assignOrder(req: Request, res: Response): Promise<void> {
 
 export async function updateOrderStatus(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as IdParam;
-  const order = await ordersService.updateOrderStatus(id, req.body as UpdateOrderStatusInput);
+  const scopeDelivererId = await resolveDelivererScope(req);
+  const order = await ordersService.updateOrderStatus(
+    id,
+    req.body as UpdateOrderStatusInput,
+    scopeDelivererId,
+  );
+  sendOk(res, order);
+}
+
+export async function acceptOrder(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const me = await deliverersService.getDelivererByUserId(req.user.sub);
+  const order = await ordersService.acceptOrder(id, me.id);
+  sendOk(res, order);
+}
+
+export async function declineOrder(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const me = await deliverersService.getDelivererByUserId(req.user.sub);
+  const order = await ordersService.declineOrder(id, me.id);
+  sendOk(res, order);
+}
+
+export async function updateOrderItems(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as IdParam;
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const me = await deliverersService.getDelivererByUserId(req.user.sub);
+  const order = await ordersService.updateOrder(id, req.body as UpdateOrderItemsInput, me.id);
   sendOk(res, order);
 }
 
