@@ -490,6 +490,12 @@ model Category {
   name      String
   slug      String   @unique
   icon      String?
+  // Mismo criterio que Product.imageUrl: solo la URL (Cloudinary), nunca el binario. Si no hay
+  // imagen, la app cae a `icon`; si tampoco hay `icon`, muestra un ícono genérico.
+  imageUrl      String?
+  // Mismo criterio que Business.logoBlurhash. Se calcula al subir la imagen; si imageUrl se
+  // edita a mano queda en null.
+  imageBlurhash String?
   active    Boolean  @default(true)
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())

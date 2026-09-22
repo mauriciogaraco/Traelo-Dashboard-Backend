@@ -54,6 +54,10 @@ export interface CatalogCategoryDTO {
   name: string;
   slug: string;
   icon: string | null;
+  // Con ?v=<updatedAt> para que una imagen nueva invalide el cache del móvil (mismo criterio
+  // que Business.logoUrl / Product.imageUrl). Sin imagen, la app cae a `icon`.
+  imageUrl: string | null;
+  imageBlurhash: string | null;
   sortOrder: number;
 }
 
@@ -164,13 +168,18 @@ function toCategoryDTO(category: {
   name: string;
   slug: string;
   icon: string | null;
+  imageUrl: string | null;
+  imageBlurhash: string | null;
   sortOrder: number;
+  updatedAt: Date;
 }): CatalogCategoryDTO {
   return {
     id: category.id,
     name: category.name,
     slug: category.slug,
     icon: category.icon,
+    imageUrl: versionedUrl(category.imageUrl, category.updatedAt),
+    imageBlurhash: category.imageBlurhash,
     sortOrder: category.sortOrder,
   };
 }

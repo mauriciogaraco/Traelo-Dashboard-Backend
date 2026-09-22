@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { sendCreated, sendOk, sendPaginated } from '../../shared/http';
+import { BadRequestError } from '../../shared/errors';
 import * as categoriesService from './categories.service';
 import type {
   CategoryIdParam,
@@ -34,5 +35,14 @@ export async function updateCategory(req: Request, res: Response): Promise<void>
 export async function deactivateCategory(req: Request, res: Response): Promise<void> {
   const { id } = req.params as unknown as CategoryIdParam;
   const category = await categoriesService.deactivateCategory(id);
+  sendOk(res, category);
+}
+
+export async function setImage(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as CategoryIdParam;
+  if (!req.file) {
+    throw new BadRequestError('Falta el archivo de imagen (campo "image")', 'MISSING_FILE');
+  }
+  const category = await categoriesService.setCategoryImage(id, req.file.buffer);
   sendOk(res, category);
 }

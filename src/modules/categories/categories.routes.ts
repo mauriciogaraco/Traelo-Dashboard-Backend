@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../../middlewares/authenticate';
 import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
+import { imageUpload } from '../../middlewares/imageUpload';
 import { Role } from '../../generated/prisma/enums';
 import * as categoriesController from './categories.controller';
 import {
@@ -49,4 +50,12 @@ categoriesRouter.delete(
   authorize(Role.OWNER, Role.ADMIN),
   validate({ params: categoryIdParamSchema }),
   categoriesController.deactivateCategory,
+);
+
+categoriesRouter.post(
+  '/:id/image',
+  authorize(Role.OWNER, Role.ADMIN),
+  validate({ params: categoryIdParamSchema }),
+  imageUpload.single('image'),
+  categoriesController.setImage,
 );

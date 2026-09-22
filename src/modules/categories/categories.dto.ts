@@ -27,6 +27,7 @@ export const createCategorySchema = z.object({
   name: z.string().min(2).max(80),
   slug: slugSchema,
   icon: z.string().min(1).max(80).optional(),
+  imageUrl: z.url('URL de imagen inválida').optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),
 });
 
@@ -36,6 +37,7 @@ export const updateCategorySchema = z.object({
   name: z.string().min(2).max(80).optional(),
   slug: slugSchema.optional(),
   icon: z.string().min(1).max(80).optional(),
+  imageUrl: z.url('URL de imagen inválida').nullable().optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),
   active: z.boolean().optional(),
 });
