@@ -10,6 +10,7 @@ import { updateDelivererLocationSchema } from '../tracking/deliverer-location.dt
 import {
   createDelivererSchema,
   listDeliverersQuerySchema,
+  updateDelivererDutySchema,
   updateDelivererPushTokenSchema,
   updateDelivererSchema,
 } from './deliverers.dto';
@@ -51,6 +52,17 @@ deliverersRouter.patch(
   authorize(Role.DELIVERER),
   validate({ body: updateDelivererPushTokenSchema }),
   deliverersController.updateMyPushToken,
+);
+
+// DELIVERER, exclusivo: activarse/desactivarse en la cola de despacho automático — mientras está
+// activo, createOrder le asigna directo los pedidos nuevos en orden de turno (ver
+// deliverersService.setDelivererDuty y ordersService.dispatchToQueue). No reemplaza la
+// asignación manual del staff (PATCH /orders/:id/assign), que sigue funcionando igual.
+deliverersRouter.patch(
+  '/me/duty',
+  authorize(Role.DELIVERER),
+  validate({ body: updateDelivererDutySchema }),
+  deliverersController.updateMyDuty,
 );
 
 // DELIVERER, exclusivo: buscar negocios/productos del catálogo para editar el vale (agregar

@@ -7,6 +7,7 @@ import * as catalogService from '../catalog/catalog.service';
 import type {
   CreateDelivererInput,
   ListDeliverersQuery,
+  UpdateDelivererDutyInput,
   UpdateDelivererInput,
   UpdateDelivererPushTokenInput,
 } from './deliverers.dto';
@@ -66,6 +67,16 @@ export async function updateMyPushToken(req: Request, res: Response): Promise<vo
   const { expoPushToken } = req.body as UpdateDelivererPushTokenInput;
   const me = await deliverersService.getDelivererByUserId(req.user.sub);
   const deliverer = await deliverersService.setDelivererPushToken(me.id, expoPushToken);
+  sendOk(res, deliverer);
+}
+
+export async function updateMyDuty(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new UnauthorizedError();
+  }
+  const { onDuty } = req.body as UpdateDelivererDutyInput;
+  const me = await deliverersService.getDelivererByUserId(req.user.sub);
+  const deliverer = await deliverersService.setDelivererDuty(me.id, onDuty);
   sendOk(res, deliverer);
 }
 

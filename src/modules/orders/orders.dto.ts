@@ -63,14 +63,35 @@ export const updateOrderSchema = z.object({
 
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 
+// Edición acotada para DELIVERER (app móvil, PATCH /:id/items): solo puede cambiar
+// cantidad/precio/negocio de los productos que ya lleva el vale — nunca datos del cliente ni
+// mensajería/Servicio Tráelo, eso sigue siendo exclusivo del staff vía updateOrderSchema arriba.
+export const updateOrderItemsSchema = z.object({
+  businesses: z.array(orderBusinessInputSchema).min(1),
+});
+
+export type UpdateOrderItemsInput = z.infer<typeof updateOrderItemsSchema>;
+
 export const assignOrderSchema = z.object({
   delivererId: z.cuid(),
 });
 
 export type AssignOrderInput = z.infer<typeof assignOrderSchema>;
 
+// CONFIRMED: el mensajero acepta explícitamente un pedido ASSIGNED (app móvil, requiere haber
+// llamado antes PATCH /:id/accept). HEADING_OUT/PICKING_UP/ON_THE_WAY: sub-fases del trayecto,
+// avanzadas una por una por el mensajero desde la app entre confirmar y completar (ver
+// ordersService.DELIVERER_STATUS_TRANSITIONS). Staff puede seguir yendo directo a
+// COMPLETED/CANCELLED desde ASSIGNED, sin pasar por ningún paso intermedio.
 export const updateOrderStatusSchema = z.object({
-  status: z.enum(['COMPLETED', 'CANCELLED']),
+  status: z.enum([
+    'CONFIRMED',
+    'HEADING_OUT',
+    'PICKING_UP',
+    'ON_THE_WAY',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
 });
 
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;

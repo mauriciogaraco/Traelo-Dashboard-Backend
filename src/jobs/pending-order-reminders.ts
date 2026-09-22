@@ -3,11 +3,11 @@ import { notifyDeliverer } from '../shared/push';
 import * as ordersRepository from '../modules/orders/orders.repository';
 
 // "Margen prudente" pedido explícitamente por el negocio (app móvil, mensajero): un mensajero
-// con un pedido asignado que todavía no recogió (pickingUpAt null) recibe como mucho un
-// recordatorio cada PENDING_ORDER_REMINDER_INTERVAL_MS, nunca uno por cada corrida del job
-// (Order.lastReminderPushAt es lo que hace cumplir esto). El primero tampoco sale de inmediato:
-// se espera PENDING_ORDER_REMINDER_INITIAL_DELAY_MS desde que se asignó, para no interrumpir a
-// alguien que todavía está mirando la pantalla decidiendo.
+// con un pedido por aceptar/confirmar recibe como mucho un recordatorio cada
+// PENDING_ORDER_REMINDER_INTERVAL_MS, nunca uno por cada corrida del job (Order.lastReminderPushAt
+// es lo que hace cumplir esto). El primero tampoco sale de inmediato: se espera
+// PENDING_ORDER_REMINDER_INITIAL_DELAY_MS desde que el pedido entró en ese estado, para no
+// interrumpir a alguien que todavía está mirando la pantalla decidiendo.
 export const PENDING_ORDER_REMINDER_INITIAL_DELAY_MS = 3 * 60_000; // 3 min
 export const PENDING_ORDER_REMINDER_INTERVAL_MS = 10 * 60_000; // 10 min
 // Cada cuánto corre el job: más seguido que el margen (para no atrasarse mucho en detectar que
@@ -23,10 +23,15 @@ export async function checkPendingOrderReminders(now: Date = new Date()): Promis
   for (const order of candidates) {
     if (!order.delivererId) continue; // el where ya lo garantiza, esto es solo para TS
 
-    const pendingSince = order.assignedAt ?? order.orderDate;
+    // "Por aceptar" cuenta desde que se asignó; "por confirmar" (ya aceptado, mismo status
+    // ASSIGNED) cuenta desde que aceptó — es el momento real en que empezó a estar pendiente
+    // de ESTA decisión puntual, no el momento en que se creó el pedido.
+    const pendingSince = order.acceptedAt ?? order.assignedAt ?? order.orderDate;
     if (pendingSince > initialDelayCutoff) continue;
 
-    const message = `Tienes el pedido #${order.orderNumber} por recoger.`;
+    const message = order.acceptedAt
+      ? `Tienes el pedido #${order.orderNumber} por confirmar.`
+      : `Tienes el pedido #${order.orderNumber} por aceptar.`;
 
     await notifyDeliverer(order.delivererId, 'Pedido pendiente', message, {
       orderId: order.id,

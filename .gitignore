@@ -9,3 +9,4 @@ npm-debug.log*
 coverage/
 
 /src/generated/prisma
+.local-pgdata/

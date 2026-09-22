@@ -39,3 +39,9 @@ export const updateDelivererPushTokenSchema = z.object({
 });
 
 export type UpdateDelivererPushTokenInput = z.infer<typeof updateDelivererPushTokenSchema>;
+
+export const updateDelivererDutySchema = z.object({
+  onDuty: z.boolean(),
+});
+
+export type UpdateDelivererDutyInput = z.infer<typeof updateDelivererDutySchema>;

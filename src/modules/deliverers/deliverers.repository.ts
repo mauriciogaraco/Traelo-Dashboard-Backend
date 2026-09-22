@@ -71,3 +71,39 @@ export function setExpoPushToken(delivererId: string, expoPushToken: string | nu
     include: { user: true },
   });
 }
+
+// Cola de despacho automático — ver el comentario en el modelo Deliverer (schema.prisma).
+export function setQueuedAt(delivererId: string, queuedAt: Date | null) {
+  return prisma.deliverer.update({
+    where: { id: delivererId },
+    data: { queuedAt },
+    include: { user: true },
+  });
+}
+
+// El siguiente en turno: el que está en línea (queuedAt no-null) desde hace más tiempo, entre
+// los que además siguen habilitados (user.active) — un mensajero dado de baja no debe recibir
+// pedidos nuevos aunque nunca se haya puesto fuera de línea él mismo.
+//
+// excludeDelivererId se usa al re-despachar tras un decline (ver ordersService.declineOrder):
+// sin esto, si quien acaba de declinar no llegó a la cola vía el despacho automático (p.ej. el
+// staff lo asignó a mano), seguiría siendo "el más antiguo" y se le volvería a ofrecer el mismo
+// pedido que acaba de rechazar. Con la exclusión, la cola avanza sí o sí al siguiente — y en
+// pedidos futuros (una vez ya excluido de este lookup) puede volver a tocarle su turno normal.
+export function findNextInQueue(excludeDelivererId?: string) {
+  return prisma.deliverer.findFirst({
+    where: {
+      queuedAt: { not: null },
+      user: { active: true },
+      ...(excludeDelivererId ? { id: { not: excludeDelivererId } } : {}),
+    },
+    orderBy: { queuedAt: 'asc' },
+    include: { user: true },
+  });
+}
+
+// Se llama justo después de asignarle un pedido al de turno — lo manda al final de la cola
+// (mismo mecanismo que activarse: un timestamp fresco siempre queda detrás de todos).
+export function bumpQueue(delivererId: string) {
+  return prisma.deliverer.update({ where: { id: delivererId }, data: { queuedAt: new Date() } });
+}
