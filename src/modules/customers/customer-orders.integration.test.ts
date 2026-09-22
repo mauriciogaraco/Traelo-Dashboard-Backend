@@ -341,6 +341,9 @@ describe('creación de pedidos desde la app (integración)', () => {
       completedAt: null,
       cancelledAt: null,
       delivererName: null,
+      delivererPhotoUrl: null,
+      pickingUpAt: null,
+      onTheWayAt: null,
     });
   });
 
