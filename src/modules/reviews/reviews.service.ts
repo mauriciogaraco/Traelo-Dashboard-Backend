@@ -1,9 +1,10 @@
 import { ConflictError, BadRequestError, NotFoundError } from '../../shared/errors';
 import { decimalToNumber } from '../../shared/prisma';
+import { sendTelegramMessage } from '../../shared/telegram';
 import { Prisma } from '../../generated/prisma/client';
 import * as repository from './reviews.repository';
 import type { OrderForReview } from './reviews.repository';
-import type { BusinessReviewsInput, DelivererReviewInput } from './reviews.dto';
+import type { BusinessReviewsInput, DelivererReviewInput, OrderCommentInput } from './reviews.dto';
 
 // Quién pide. La AUTORIZACIÓN sobre el pedido ya la resolvió la ruta:
 //  - customer: el id sale del token verificado (rutas /customers/:id/..., :id = el del token);
@@ -214,6 +215,25 @@ export async function submitBusinessReviews(
   }
 
   return getOrderReviews(access, orderId);
+}
+
+// Opinión libre y opcional sobre el pedido (checklist: "que se sienta ligero, no obligatorio").
+// A diferencia de las valoraciones por estrellas, no se guarda en la base de datos: se manda tal
+// cual al grupo de Telegram del equipo, identificada SOLO por orderId/orderNumber — nunca con
+// nombre/teléfono/dirección del cliente. Quien lea el mensaje busca el pedido en el dashboard si
+// necesita el contacto. Nunca lanza si Telegram falla: sendTelegramMessage ya se traga sus
+// propios errores.
+export async function submitOrderComment(
+  access: ReviewAccess,
+  orderId: string,
+  input: OrderCommentInput,
+): Promise<void> {
+  const order = await loadOrder(access, orderId);
+  assertCompleted(order);
+
+  await sendTelegramMessage(
+    `Opinión del pedido #${order.orderNumber} (${order.id}): ${input.comment}`,
+  );
 }
 
 // Pedidos completados recientes de un cliente a los que todavía les falta alguna valoración

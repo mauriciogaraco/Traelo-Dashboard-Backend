@@ -36,3 +36,11 @@ export const businessReviewsSchema = z
   );
 
 export type BusinessReviewsInput = z.infer<typeof businessReviewsSchema>;
+
+// Opinión libre y opcional sobre el pedido — no reemplaza las valoraciones por estrellas, es un
+// canal aparte para que el cliente escriba lo que quiera (se manda a Telegram, no se guarda).
+export const orderCommentSchema = z.object({
+  comment: z.string().trim().min(1, 'El comentario no puede estar vacío').max(1000),
+});
+
+export type OrderCommentInput = z.infer<typeof orderCommentSchema>;

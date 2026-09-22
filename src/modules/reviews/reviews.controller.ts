@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { sendCreated, sendOk } from '../../shared/http';
 import * as reviewsService from './reviews.service';
 import type { ReviewAccess } from './reviews.service';
-import type { BusinessReviewsInput, DelivererReviewInput } from './reviews.dto';
+import type { BusinessReviewsInput, DelivererReviewInput, OrderCommentInput } from './reviews.dto';
 
 // Mismos handlers para las dos vías de acceso: /customers/:id/orders/:orderId/reviews (cliente
 // con cuenta; :id ya se verificó contra el token) y /guest/orders/:orderId/reviews (invitado con
@@ -38,6 +38,11 @@ export async function submitBusinessReviews(req: Request, res: Response): Promis
     req.body as BusinessReviewsInput,
   );
   sendCreated(res, state);
+}
+
+export async function submitOrderComment(req: Request, res: Response): Promise<void> {
+  await reviewsService.submitOrderComment(accessOf(req), orderIdOf(req), req.body as OrderCommentInput);
+  sendCreated(res, { ok: true });
 }
 
 export async function listPendingReviews(req: Request, res: Response): Promise<void> {
