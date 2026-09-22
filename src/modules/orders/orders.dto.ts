@@ -9,6 +9,10 @@ const orderItemInputSchema = z
     productName: z.string().min(1).max(150).optional(),
     quantity: z.coerce.number().int().positive().default(1),
     unitPrice: z.coerce.number().min(0),
+    // Empaque ya resuelto (nombre + costo total de la línea) por quien arma este input — ver
+    // customer-orders.service.ts (resolveItemForCart). El flujo manual del dashboard no los usa.
+    packagingName: z.string().min(1).max(60).optional(),
+    packagingFee: z.coerce.number().min(0).optional(),
   })
   .refine((item) => item.productId !== undefined || item.productName !== undefined, {
     message: 'Debe indicar productId o productName',
@@ -63,14 +67,35 @@ export const updateOrderSchema = z.object({
 
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 
+// Edición acotada para DELIVERER (app móvil, PATCH /:id/items): solo puede cambiar
+// cantidad/precio/negocio de los productos que ya lleva el vale — nunca datos del cliente ni
+// mensajería/Servicio Tráelo, eso sigue siendo exclusivo del staff vía updateOrderSchema arriba.
+export const updateOrderItemsSchema = z.object({
+  businesses: z.array(orderBusinessInputSchema).min(1),
+});
+
+export type UpdateOrderItemsInput = z.infer<typeof updateOrderItemsSchema>;
+
 export const assignOrderSchema = z.object({
   delivererId: z.cuid(),
 });
 
 export type AssignOrderInput = z.infer<typeof assignOrderSchema>;
 
+// CONFIRMED: el mensajero acepta explícitamente un pedido ASSIGNED (app móvil, requiere haber
+// llamado antes PATCH /:id/accept). HEADING_OUT/PICKING_UP/ON_THE_WAY: sub-fases del trayecto,
+// avanzadas una por una por el mensajero desde la app entre confirmar y completar (ver
+// ordersService.DELIVERER_STATUS_TRANSITIONS). Staff puede seguir yendo directo a
+// COMPLETED/CANCELLED desde ASSIGNED, sin pasar por ningún paso intermedio.
 export const updateOrderStatusSchema = z.object({
-  status: z.enum(['COMPLETED', 'CANCELLED']),
+  status: z.enum([
+    'CONFIRMED',
+    'HEADING_OUT',
+    'PICKING_UP',
+    'ON_THE_WAY',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
 });
 
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;

@@ -2,15 +2,18 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './shared/logger';
 import { prisma } from './shared/prisma';
+import { startPendingOrderReminderJob, stopPendingOrderReminderJob } from './jobs/pending-order-reminders';
 
 const app = createApp();
 
 const server = app.listen(env.PORT, () => {
   logger.info(`Tráelo Operaciones backend escuchando en el puerto ${env.PORT} (${env.NODE_ENV})`);
+  startPendingOrderReminderJob();
 });
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Recibida señal ${signal}, cerrando servidor...`);
+  stopPendingOrderReminderJob();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

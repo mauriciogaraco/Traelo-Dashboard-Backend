@@ -11,6 +11,10 @@ export const appOrderItemSchema = z.object({
   // cambió (Fase 11: respuesta CART_CHANGED) — nunca para calcular el cargo real, que
   // siempre sale de getEffectiveProductPrice en el servidor.
   expectedPrice: z.coerce.number().min(0).optional(),
+  // Nombre de la opción de empaque elegida (una de Product.packaging). Opcional: sin ella no
+  // se cobra empaque. El precio/capacidad SIEMPRE se resuelven en el servidor contra el
+  // catálogo vigente (resolveItemForCart) — igual que el precio, nunca se manda el costo.
+  packagingName: z.string().trim().min(1).max(60).optional(),
 });
 
 export const appOrderBusinessSchema = z.object({

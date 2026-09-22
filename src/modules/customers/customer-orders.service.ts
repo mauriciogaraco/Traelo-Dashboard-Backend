@@ -4,6 +4,7 @@ import {
   CartChangedError,
   ConflictError,
 } from '../../shared/errors';
+import { Prisma } from '../../generated/prisma/client';
 import { decimalToNumber } from '../../shared/prisma';
 import type { PaginationMeta } from '../../shared/http';
 import * as businessesRepository from '../businesses/businesses.repository';
@@ -11,6 +12,7 @@ import * as productsRepository from '../businesses/products.repository';
 import * as productOffersRepository from '../businesses/product-offers.repository';
 import { resolveEffectivePrice } from '../businesses/effective-price';
 import { isBusinessOpen, type BusinessOpenReason } from '../businesses/business-status.service';
+import { parsePackaging } from '../businesses/packaging';
 import * as customersService from './customers.service';
 import * as addressesRepository from './customer-addresses.repository';
 import * as ordersService from '../orders/orders.service';
@@ -19,6 +21,7 @@ import { createGuestAccessToken, hashGuestAccessToken } from '../guest-orders/gu
 import type { CreateOrderInput } from '../orders/orders.dto';
 import type { OrderStatus } from '../../generated/prisma/enums';
 import { computeAppDeliveryFee } from '../orders/delivery-fee-calculator';
+import { computePackagingFee } from '../orders/orders.calculations';
 import { RedemptionError } from '../loyalty/rewards.rules';
 import type { RedemptionRequest } from '../loyalty/rewards.service';
 import type {
@@ -67,14 +70,16 @@ interface ResolvedItem {
   productId: string;
   quantity: number;
   unitPrice: number;
+  packagingName?: string;
+  packagingFee?: number;
 }
 
 // Resuelve una línea del carrito contra el estado actual (producto existe/activo/disponible,
-// precio efectivo). En vez de tirar un error en la primera línea que falla (Fase 11:
-// CART_CHANGED), empuja un CartChange a `changes` y devuelve null — así se junta el diff
-// completo del carrito en una sola pasada.
+// precio efectivo, y el empaque elegido si lo hay). En vez de tirar un error en la primera
+// línea que falla (Fase 11: CART_CHANGED), empuja un CartChange a `changes` y devuelve null —
+// así se junta el diff completo del carrito en una sola pasada.
 async function resolveItemForCart(
-  itemInput: { productId: string; quantity: number; expectedPrice?: number },
+  itemInput: { productId: string; quantity: number; expectedPrice?: number; packagingName?: string },
   businessId: string,
   now: Date,
   changes: CartChange[],
@@ -123,10 +128,34 @@ async function resolveItemForCart(
     return null;
   }
 
+  let packagingName: string | undefined;
+  let packagingFee: number | undefined;
+  if (itemInput.packagingName !== undefined) {
+    const options = parsePackaging(product.packaging) ?? [];
+    const match = options.find(
+      (option) => option.name.toLowerCase() === itemInput.packagingName?.toLowerCase(),
+    );
+    if (!match) {
+      changes.push({
+        type: 'product',
+        productId: itemInput.productId,
+        reason: 'PACKAGING_UNAVAILABLE',
+        message: `El empaque "${itemInput.packagingName}" ya no está disponible para ${product.name}`,
+      });
+      return null;
+    }
+    packagingName = match.name;
+    packagingFee = decimalToNumber(
+      computePackagingFee(match.price, itemInput.quantity, match.capacity),
+    );
+  }
+
   return {
     productId: itemInput.productId,
     quantity: itemInput.quantity,
     unitPrice: effective.price,
+    packagingName,
+    packagingFee,
   };
 }
 
@@ -219,7 +248,19 @@ async function resolveCart(
     throw new CartChangedError(changes);
   }
 
-  const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now));
+  // Subtotal de productos (CUP, sin delivery ni servicio) — el recargo por volumen de
+  // computeAppDeliveryFee lo necesita para saber si el pedido es "grande".
+  const productsSubtotal = businesses.reduce(
+    (sum, group) =>
+      sum.plus(
+        group.items.reduce(
+          (groupSum, item) => groupSum.plus(new Prisma.Decimal(item.unitPrice).times(item.quantity)),
+          new Prisma.Decimal(0),
+        ),
+      ),
+    new Prisma.Decimal(0),
+  );
+  const deliveryFee = decimalToNumber(computeAppDeliveryFee(deliveryFeeBases, now, productsSubtotal));
 
   return { businesses, deliveryFee };
 }

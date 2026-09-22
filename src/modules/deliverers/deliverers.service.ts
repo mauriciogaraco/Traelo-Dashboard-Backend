@@ -25,6 +25,9 @@ export interface DelivererDTO {
   commissionPercentage: number | null;
   effectiveCommissionPercentage: number;
   photoUrl: string | null;
+  // Derivado de queuedAt !== null — ver setDelivererDuty y la cola de despacho automático
+  // (deliverersRepository.findNextInQueue/bumpQueue).
+  onDuty: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +38,7 @@ interface DelivererRecord {
   joinedAt: Date;
   commissionPercentage: Prisma.Decimal | null;
   photoUrl?: string | null;
+  queuedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   user: {
@@ -58,6 +62,7 @@ function toDTO(record: DelivererRecord, defaultCommissionPercentage: number): De
     commissionPercentage,
     effectiveCommissionPercentage: commissionPercentage ?? defaultCommissionPercentage,
     photoUrl: record.photoUrl ?? null,
+    onDuty: (record.queuedAt ?? null) !== null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -160,6 +165,65 @@ export async function deactivateDeliverer(id: string): Promise<DelivererDTO> {
     { active: false },
     {},
   );
+  const config = await systemConfigService.getSystemConfig();
+  return toDTO(updated, config.defaultDelivererCommissionPercentage);
+}
+
+// "Reiniciar historial" (app móvil): el mensajero decide que ya no quiere ver en su Historial
+// los pedidos entregados/cancelados de antes de ahora. Puramente de visualización — nunca
+// borra ni modifica los pedidos en sí, ni afecta lo que ve el staff/dashboard/cuadres (ver
+// ordersService.listOrders, que solo aplica este filtro cuando el que pregunta es el propio
+// DELIVERER). Volver a poner `historyResetAt` en el pasado no es posible desde acá: cada
+// reinicio solo puede avanzar la fecha, nunca retroceder ni "deshacer" un reinicio anterior.
+export async function resetDelivererHistory(id: string): Promise<DelivererDTO> {
+  const existing = await deliverersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  const updated = await deliverersRepository.setHistoryResetAt(id, new Date());
+  const config = await systemConfigService.getSystemConfig();
+  return toDTO(updated, config.defaultDelivererCommissionPercentage);
+}
+
+// Toggle propio del mensajero (app móvil): "activo" = en línea, recibe pedidos nuevos por la
+// cola de despacho automático; "inactivo" = se sale de la cola por completo (no solo se salta
+// un turno — la próxima vez que se ponga activo vuelve a entrar al final, detrás de quien sea
+// que haya recibido el último pedido, nunca conserva la posición que tenía antes). Ver
+// deliverersRepository.setQueuedAt / findNextInQueue / bumpQueue y el comentario en
+// Deliverer.queuedAt (schema.prisma).
+export async function setDelivererDuty(id: string, onDuty: boolean): Promise<DelivererDTO> {
+  const existing = await deliverersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  // Idempotente: ya está en el estado pedido, no lo toca (evita reordenar la cola de un
+  // "activar" repetido, p.ej. doble-tap o reintento offline).
+  const alreadyOnDuty = existing.queuedAt !== null;
+  if (alreadyOnDuty === onDuty) {
+    const config = await systemConfigService.getSystemConfig();
+    return toDTO(existing, config.defaultDelivererCommissionPercentage);
+  }
+
+  const updated = await deliverersRepository.setQueuedAt(id, onDuty ? new Date() : null);
+  const config = await systemConfigService.getSystemConfig();
+  return toDTO(updated, config.defaultDelivererCommissionPercentage);
+}
+
+// Registro del token de notificaciones push (app móvil) — ver Deliverer.expoPushToken
+// (schema.prisma). Se sobrescribe sin más: un mensajero con sesión en un dispositivo nuevo
+// reemplaza el token del anterior, no se acumula una lista.
+export async function setDelivererPushToken(
+  id: string,
+  expoPushToken: string | null,
+): Promise<DelivererDTO> {
+  const existing = await deliverersRepository.findById(id);
+  if (!existing) {
+    throw new NotFoundError('Mensajero no encontrado');
+  }
+
+  const updated = await deliverersRepository.setExpoPushToken(id, expoPushToken);
   const config = await systemConfigService.getSystemConfig();
   return toDTO(updated, config.defaultDelivererCommissionPercentage);
 }

@@ -46,6 +46,8 @@ export interface CatalogBusinessDTO {
   logoUrl: string | null;
   // Placeholder mientras carga logoUrl (https://blurha.sh); null si el logo no tiene blurhash.
   logoBlurhash: string | null;
+  // Fecha de alta del negocio en Tráelo — permite a la app ordenar "más recientes".
+  joinedAt: Date;
   hours: CatalogBusinessHoursDTO[];
 }
 
@@ -54,12 +56,18 @@ export interface CatalogCategoryDTO {
   name: string;
   slug: string;
   icon: string | null;
+  // Con ?v=<updatedAt> para que una imagen nueva invalide el cache del móvil (mismo criterio
+  // que Business.logoUrl / Product.imageUrl). Sin imagen, la app cae a `icon`.
+  imageUrl: string | null;
+  imageBlurhash: string | null;
   sortOrder: number;
 }
 
 export interface CatalogProductOfferDTO {
   id: string;
   price: number;
+  // Cuándo arrancó esta oferta — permite a la app ordenar "ofertas recientes".
+  startsAt: Date;
   endsAt: Date;
 }
 
@@ -105,6 +113,7 @@ interface CatalogBusinessRecord {
   acceptingOrders: boolean;
   logoUrl: string | null;
   logoBlurhash: string | null;
+  joinedAt: Date;
   updatedAt: Date;
   businessHours: { dayOfWeek: number; openTime: Date; closeTime: Date; closed: boolean }[];
 }
@@ -123,7 +132,7 @@ interface CatalogProductRecord {
   lowStock: boolean;
   updatedAt: Date;
   categoryRef: { name: string } | null;
-  offers: { id: string; price: Prisma.Decimal; endsAt: Date }[];
+  offers: { id: string; price: Prisma.Decimal; startsAt: Date; endsAt: Date }[];
 }
 
 // ?v=<updatedAt> para que un cambio de imagen invalide agresivamente el cache del móvil
@@ -150,6 +159,7 @@ async function toBusinessDTO(
     isOpenNow: status.open,
     logoUrl: versionedUrl(business.logoUrl, business.updatedAt),
     logoBlurhash: business.logoBlurhash,
+    joinedAt: business.joinedAt,
     hours: business.businessHours.map((h) => ({
       dayOfWeek: h.dayOfWeek,
       openTime: timeToString(h.openTime),
@@ -164,13 +174,18 @@ function toCategoryDTO(category: {
   name: string;
   slug: string;
   icon: string | null;
+  imageUrl: string | null;
+  imageBlurhash: string | null;
   sortOrder: number;
+  updatedAt: Date;
 }): CatalogCategoryDTO {
   return {
     id: category.id,
     name: category.name,
     slug: category.slug,
     icon: category.icon,
+    imageUrl: versionedUrl(category.imageUrl, category.updatedAt),
+    imageBlurhash: category.imageBlurhash,
     sortOrder: category.sortOrder,
   };
 }
@@ -179,7 +194,12 @@ function toProductDTO(product: CatalogProductRecord): CatalogProductDTO {
   const activeOffer = product.offers[0] ?? null;
   const effective = resolveEffectivePrice(product.price, activeOffer);
   const offer: CatalogProductOfferDTO | null = activeOffer
-    ? { id: activeOffer.id, price: decimalToNumber(activeOffer.price), endsAt: activeOffer.endsAt }
+    ? {
+        id: activeOffer.id,
+        price: decimalToNumber(activeOffer.price),
+        startsAt: activeOffer.startsAt,
+        endsAt: activeOffer.endsAt,
+      }
     : null;
 
   return {

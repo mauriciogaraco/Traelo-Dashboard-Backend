@@ -7,6 +7,11 @@ export interface ItemInput {
   productName?: string;
   quantity: number;
   unitPrice: number;
+  // Empaque ya resuelto por el caller (nombre + costo total de esta línea). Ambos ausentes =
+  // sin empaque. Nunca se recalcula acá: quien arma el ItemInput ya validó el nombre contra
+  // Product.packaging y calculó el costo con computePackagingFee.
+  packagingName?: string | null;
+  packagingFee?: number;
 }
 
 export interface ComputedItemPrice {
@@ -15,11 +20,16 @@ export interface ComputedItemPrice {
   quantity: number;
   unitPrice: Money;
   subtotal: Money;
+  packagingName: string | null;
+  packagingFee: Money;
 }
 
 /**
  * Precio y subtotal de una línea. El unitPrice viene tal cual del negocio/empleado — nunca se
  * infla acá ni en ningún otro lugar del backend; la ganancia de Tráelo es platformFee, aparte.
+ * `subtotal` es SOLO el producto (unitPrice × quantity): el empaque viaja aparte en
+ * `packagingFee` para no romper la lectura "cantidad × precio" en los recibos, y para que
+ * prepareBusinessGroups pueda excluirlo de la base de la comisión por %.
  */
 export function computeItem(input: ItemInput, productName: string): ComputedItemPrice {
   const unitPrice = new Prisma.Decimal(input.unitPrice);
@@ -31,7 +41,19 @@ export function computeItem(input: ItemInput, productName: string): ComputedItem
     quantity: input.quantity,
     unitPrice,
     subtotal,
+    packagingName: input.packagingName ?? null,
+    packagingFee: new Prisma.Decimal(input.packagingFee ?? 0),
   };
+}
+
+/**
+ * Cuántos empaques hacen falta para `quantity` unidades y cuánto cuestan en total. Sin
+ * `capacity` se cobra un empaque por unidad (ej. una caja individual); con `capacity`, uno
+ * cada N unidades, redondeando siempre hacia arriba (ej. capacity=6 y quantity=14 → 3 cajas).
+ */
+export function computePackagingFee(unitPrice: number, quantity: number, capacity?: number): Money {
+  const units = capacity && capacity > 0 ? Math.ceil(quantity / capacity) : quantity;
+  return new Prisma.Decimal(unitPrice).mul(units);
 }
 
 /** Redondea siempre hacia arriba al múltiplo de 10 más cercano. Único lugar de esta regla. */

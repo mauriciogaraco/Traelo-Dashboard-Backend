@@ -19,6 +19,7 @@ describe('creación de pedidos desde la app (integración)', () => {
   let productBId: string; // con oferta activa
   let productOfBusinessBId: string; // producto del negocio B (pedidos multi-negocio)
   let unavailableProductId: string;
+  let productWithPackagingId: string; // "Caja chica" sin capacity, "Caja grande" con capacity 6
   let customerId: string;
   let addressId: string;
 
@@ -95,6 +96,16 @@ describe('creación de pedidos desde la app (integración)', () => {
     await productsService.setProductAvailability(businessAId, unavailableProductId, {
       available: false,
     });
+
+    const productWithPackaging = await productsService.createProduct(businessAId, {
+      name: 'Producto con empaque',
+      price: 200,
+      packaging: [
+        { name: 'Caja chica', price: 50 }, // sin capacity: un empaque por unidad
+        { name: 'Caja grande', price: 100, capacity: 6 }, // uno cada 6 unidades
+      ],
+    });
+    productWithPackagingId = productWithPackaging.id;
 
     // POST /customers ya no existe: el cliente de prueba se crea directo en la BD.
     const customer = await prisma.customer.create({
@@ -341,6 +352,9 @@ describe('creación de pedidos desde la app (integración)', () => {
       completedAt: null,
       cancelledAt: null,
       delivererName: null,
+      delivererPhotoUrl: null,
+      pickingUpAt: null,
+      onTheWayAt: null,
     });
   });
 
@@ -447,5 +461,114 @@ describe('creación de pedidos desde la app (integración)', () => {
     });
 
     expect(second.id).not.toBe(first.id);
+  });
+
+  // Fase 3 del plan: cobro de envase/empaque — Product.packaging ya existía como metadata del
+  // catálogo pero nunca se cobraba en ningún pedido.
+  describe('empaque', () => {
+    it('sin elegir empaque: no cobra nada (packagingName null, packagingFee 0)', async () => {
+      const order = await customerOrdersService.createAppOrder(customerId, {
+        addressId,
+        businesses: [{ businessId: businessAId, items: [{ productId: productWithPackagingId, quantity: 3 }] }],
+      });
+
+      const line = order.businesses[0]?.items[0];
+      expect(line?.packagingName).toBeNull();
+      expect(line?.packagingFee).toBe(0);
+      expect(order.packagingTotal).toBe(0);
+      expect(order.productsTotal).toBe(600); // 3 × 200, sin empaque
+    });
+
+    it('empaque sin capacity: un empaque por unidad', async () => {
+      const order = await customerOrdersService.createAppOrder(customerId, {
+        addressId,
+        businesses: [
+          {
+            businessId: businessAId,
+            items: [{ productId: productWithPackagingId, quantity: 3, packagingName: 'Caja chica' }],
+          },
+        ],
+      });
+
+      const line = order.businesses[0]?.items[0];
+      expect(line?.packagingName).toBe('Caja chica');
+      expect(line?.packagingFee).toBe(150); // 3 empaques × 50
+      expect(order.packagingTotal).toBe(150);
+      expect(order.productsTotal).toBe(750); // 600 de producto + 150 de empaque
+    });
+
+    it('empaque con capacity: redondea hacia arriba (14 unidades, capacity 6 → 3 empaques)', async () => {
+      const order = await customerOrdersService.createAppOrder(customerId, {
+        addressId,
+        businesses: [
+          {
+            businessId: businessAId,
+            items: [{ productId: productWithPackagingId, quantity: 14, packagingName: 'Caja grande' }],
+          },
+        ],
+      });
+
+      const line = order.businesses[0]?.items[0];
+      expect(line?.packagingFee).toBe(300); // ceil(14/6)=3 × 100
+      expect(order.packagingTotal).toBe(300);
+    });
+
+    it('el empaque NUNCA entra en la base de la comisión por %', async () => {
+      // businessA es PERCENTAGE 10%. Sin empaque: comisión = 200 × 10% = 20.
+      const withPackaging = await customerOrdersService.createAppOrder(customerId, {
+        addressId,
+        businesses: [
+          {
+            businessId: businessAId,
+            items: [{ productId: productWithPackagingId, quantity: 1, packagingName: 'Caja chica' }],
+          },
+        ],
+      });
+
+      expect(withPackaging.businesses[0]?.commissionEarned).toBe(20); // 10% de 200, NO de 250
+      expect(withPackaging.businesses[0]?.items[0]?.commissionAmount).toBe(0); // PERCENTAGE: la línea no lleva comisión propia
+    });
+
+    it('CART_CHANGED: reporta un nombre de empaque que no existe para ese producto', async () => {
+      let caught: unknown;
+      try {
+        await customerOrdersService.createAppOrder(customerId, {
+          addressId,
+          businesses: [
+            {
+              businessId: businessAId,
+              items: [{ productId: productWithPackagingId, quantity: 1, packagingName: 'Caja que no existe' }],
+            },
+          ],
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(CartChangedError);
+      const changes = (caught as CartChangedError).details as {
+        changes: { reason: string; productId?: string }[];
+      };
+      expect(changes.changes).toContainEqual(
+        expect.objectContaining({ reason: 'PACKAGING_UNAVAILABLE', productId: productWithPackagingId }),
+      );
+    });
+
+    it('quoteCheckout: el desglose incluye packagingTotal sin crear el pedido', async () => {
+      const quote = await customerOrdersService.quoteCheckout(
+        {
+          businesses: [
+            {
+              businessId: businessAId,
+              items: [{ productId: productWithPackagingId, quantity: 3, packagingName: 'Caja chica' }],
+            },
+          ],
+        },
+        customerId,
+      );
+
+      expect(quote.packagingTotal).toBe(150);
+      expect(quote.productsTotal).toBe(750);
+    });
   });
 });
